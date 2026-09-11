@@ -27,7 +27,7 @@ pub async fn serve(addr: &str) -> std::io::Result<()> {
                     let subnet = network::local_subnet_cidr();
                     let start = Instant::now();
                     let mut hosts = network::discover_hosts(350, 64).await;
-                    hosts = network::enrich_with_arp(hosts);
+                    hosts = network::enrich_with_arp(hosts).await;
                     let dur = start.elapsed().as_secs_f64();
                     let audit = report::AuditReport::new(hw, hosts, subnet, dur);
                     let json = audit.to_json_pretty().unwrap_or_else(|_| "{}".to_string());
@@ -40,7 +40,7 @@ pub async fn serve(addr: &str) -> std::io::Result<()> {
                     let subnet = network::local_subnet_cidr();
                     let start = Instant::now();
                     let mut hosts = network::discover_hosts(350, 64).await;
-                    hosts = network::enrich_with_arp(hosts);
+                    hosts = network::enrich_with_arp(hosts).await;
                     let dur = start.elapsed().as_secs_f64();
                     let audit = report::AuditReport::new(hw, hosts, subnet, dur);
                     let html = audit.to_html();

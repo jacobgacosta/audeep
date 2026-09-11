@@ -1,6 +1,6 @@
 use chrono::{DateTime, Utc};
 use serde::Serialize;
-use sysinfo::{Disks, Networks, System};
+use sysinfo::{Components, Disks, Networks, System};
 
 #[derive(Debug, Clone, Serialize)]
 pub struct CpuInfo {
@@ -38,6 +38,14 @@ pub struct NetInterface {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct SensorInfo {
+    pub label: String,
+    pub temperature_c: f32,
+    pub max_c: f32,
+    pub critical_c: Option<f32>,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct HardwareReport {
     pub timestamp: DateTime<Utc>,
     pub hostname: String,
@@ -45,10 +53,14 @@ pub struct HardwareReport {
     pub os_version: String,
     pub kernel_version: String,
     pub uptime_secs: u64,
+    pub load_avg_one: f64,
+    pub load_avg_five: f64,
+    pub load_avg_fifteen: f64,
     pub cpu: CpuInfo,
     pub memory: MemoryInfo,
     pub disks: Vec<DiskInfo>,
     pub network_interfaces: Vec<NetInterface>,
+    pub sensors: Vec<SensorInfo>,
 }
 
 fn bytes_to_gb(bytes: u64) -> f64 {
@@ -65,6 +77,7 @@ pub fn collect_hardware_info() -> HardwareReport {
     let os_version = System::os_version().unwrap_or_else(|| "unknown".to_string());
     let kernel_version = System::kernel_version().unwrap_or_else(|| "unknown".to_string());
     let uptime_secs = System::uptime();
+    let load_avg = System::load_average();
 
     // CPU
     let cpus = sys.cpus();
@@ -100,7 +113,6 @@ pub fn collect_hardware_info() -> HardwareReport {
         .collect();
 
     // Network interfaces - sysinfo 0.30 only exposes MAC + traffic, no IP
-    // IPs se dejan vacías aquí; se pueden complementar con crate `if-addrs` o `local-ip-address` si se requiere
     let networks = Networks::new_with_refreshed_list();
     let network_interfaces = networks
         .iter()
@@ -114,6 +126,18 @@ pub fn collect_hardware_info() -> HardwareReport {
         })
         .collect();
 
+    // Sensores (temperatura CPU etc, si disponible)
+    let components = Components::new_with_refreshed_list();
+    let sensors = components
+        .iter()
+        .map(|c| SensorInfo {
+            label: c.label().to_string(),
+            temperature_c: c.temperature(),
+            max_c: c.max(),
+            critical_c: c.critical(),
+        })
+        .collect();
+
     HardwareReport {
         timestamp: Utc::now(),
         hostname,
@@ -121,9 +145,13 @@ pub fn collect_hardware_info() -> HardwareReport {
         os_version,
         kernel_version,
         uptime_secs,
+        load_avg_one: load_avg.one,
+        load_avg_five: load_avg.five,
+        load_avg_fifteen: load_avg.fifteen,
         cpu,
         memory,
         disks,
         network_interfaces,
+        sensors,
     }
 }

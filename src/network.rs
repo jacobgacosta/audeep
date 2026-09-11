@@ -147,8 +147,38 @@ async fn ping_host(ip: IpAddr, timeout_ms: u64) -> bool {
     .await;
 
     match res {
-        Ok(Ok(out)) => out.status.success(),
+        Ok(Ok(out)) => {
+            // En Windows, éxito si contiene TTL=, además de exit 0
+            if out.status.success() {
+                let stdout = String::from_utf8_lossy(&out.stdout);
+                // Si no hay TTL, no es reply real (ej. 100% loss pero exit 0 en algunos casos)
+                // Pero ya filtramos por success, que en Windows es confiable (0 solo con TTL)
+                return stdout.contains("TTL=") || stdout.contains("ttl=") || !stdout.contains("Request timed out") && !stdout.contains("100% loss");
+            }
+            false
+        }
         _ => false,
+    }
+}
+
+async fn try_resolve_hostname(ip: IpAddr) -> Option<String> {
+    let ip_copy = ip;
+    // timeout 500ms para no bloquear discovery
+    let res = tokio::time::timeout(
+        std::time::Duration::from_millis(500),
+        tokio::task::spawn_blocking(move || dns_lookup::lookup_addr(&ip_copy).ok()),
+    )
+    .await;
+    match res {
+        Ok(Ok(Some(name))) => {
+            // Filtrar si el nombre es igual a la IP (no resolvió)
+            if name == ip_copy.to_string() {
+                None
+            } else {
+                Some(name.trim_end_matches('.').to_string())
+            }
+        }
+        _ => None,
     }
 }
 
@@ -174,12 +204,13 @@ pub async fn discover_hosts(timeout_ms: u64, max_concurrency: usize) -> Vec<Host
             let _permit = sem.acquire_owned().await.unwrap();
             let (alive, latency) = is_host_alive(IpAddr::V4(ip), timeout_ms).await;
             if alive {
-                // para hosts vivos, hacer escaneo rápido de puertos comunes
+                // para hosts vivos, hacer escaneo rápido de puertos comunes + reverse DNS
                 let open_ports = scanner::scan_common_ports(IpAddr::V4(ip), timeout_ms).await;
                 let vulnerabilities = crate::vuln::check_host(&open_ports);
+                let hostname = try_resolve_hostname(IpAddr::V4(ip)).await;
                 HostInfo {
                     ip: ip.to_string(),
-                    hostname: None,
+                    hostname,
                     mac: None,
                     vendor: None,
                     is_alive: true,
@@ -271,12 +302,18 @@ pub fn arp_table_snapshot() -> HashMap<String, String> {
     map
 }
 
-pub fn enrich_with_arp(mut hosts: Vec<HostInfo>) -> Vec<HostInfo> {
+pub async fn enrich_with_arp(mut hosts: Vec<HostInfo>) -> Vec<HostInfo> {
     let arp = arp_table_snapshot();
     for h in &mut hosts {
         if let Some(mac) = arp.get(&h.ip) {
             h.mac = Some(mac.clone());
             h.vendor = lookup_vendor(mac);
+        }
+        // Intentar resolver hostname si aún no tiene (con timeout corto)
+        if h.hostname.is_none() {
+            if let Ok(ip) = h.ip.parse::<IpAddr>() {
+                h.hostname = try_resolve_hostname(ip).await;
+            }
         }
     }
     // Merge: añadir hosts que están en ARP pero no fueron detectados como vivos por TCP/ping
@@ -309,9 +346,14 @@ pub fn enrich_with_arp(mut hosts: Vec<HostInfo>) -> Vec<HostInfo> {
             }
         }
         let vendor = lookup_vendor(mac);
+        let hostname = if let Ok(ip_addr) = ip.parse::<IpAddr>() {
+            try_resolve_hostname(ip_addr).await
+        } else {
+            None
+        };
         hosts.push(HostInfo {
             ip: ip.clone(),
-            hostname: None,
+            hostname,
             mac: Some(mac.clone()),
             vendor,
             is_alive: true,

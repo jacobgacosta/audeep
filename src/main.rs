@@ -78,7 +78,7 @@ async fn main() {
             println!("Escaneando red local (puede tardar 20-60s, timeout 400ms, 64 tareas paralelas)...");
             let start = Instant::now();
             let mut discovered = network::discover_hosts(400, 64).await;
-            discovered = network::enrich_with_arp(discovered);
+            discovered = network::enrich_with_arp(discovered).await;
             duration_secs = start.elapsed().as_secs_f64();
             println!("Hosts vivos: {}", discovered.len());
             for h in &discovered {

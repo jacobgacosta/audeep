@@ -110,6 +110,25 @@ impl AuditReport {
             format!("<tr><td>{}</td><td>{}</td></tr>", html_escape(&n.name), html_escape(&n.mac))
         }).collect::<Vec<_>>().join("\n");
 
+        let sensors_rows = if self.hardware.sensors.is_empty() {
+            "<tr><td colspan='4' class='muted'>No se detectaron sensores (normal en Windows/VM)</td></tr>".to_string()
+        } else {
+            self.hardware.sensors
+                .iter()
+                .map(|s| {
+                    let crit = s.critical_c.map(|c| format!("{:.1}°C", c)).unwrap_or_else(|| "—".to_string());
+                    format!(
+                        "<tr><td>{}</td><td>{:.1}°C</td><td>{:.1}°C</td><td>{}</td></tr>",
+                        html_escape(&s.label),
+                        s.temperature_c,
+                        s.max_c,
+                        html_escape(&crit)
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+
         let subnet = self.network.local_subnet.clone().unwrap_or_else(|| "no detectada".to_string());
         let oui_count: usize = serde_json::from_str::<std::collections::HashMap<String, String>>(include_str!("../assets/oui_full.json"))
             .map(|m| m.len())
@@ -158,7 +177,9 @@ footer{{color:var(--muted); font-size:12px; text-align:center; padding:18px}}
       <div class="kv"><div class="k">CPU</div><div class="v">{} ({})<br><span class="muted">{} núcleos físicos / {} lógicos @ {} MHz</span></div></div>
       <div class="kv"><div class="k">Memoria</div><div class="v">{:.1} / {:.1} GB usados</div></div>
       <div class="kv"><div class="k">Uptime</div><div class="v">{} s</div></div>
+      <div class="kv"><div class="k">Carga (1/5/15m)</div><div class="v">{:.2} / {:.2} / {:.2}</div></div>
       <div class="kv"><div class="k">Discos</div><div class="v">{} unidades</div></div>
+      <div class="kv"><div class="k">Sensores</div><div class="v">{} detectados</div></div>
     </div>
   </div>
 
@@ -170,6 +191,11 @@ footer{{color:var(--muted); font-size:12px; text-align:center; padding:18px}}
   <div class="card">
     <h2>Interfaces de red (local)</h2>
     <table><thead><tr><th>Interfaz</th><th>MAC</th></tr></thead><tbody>{}</tbody></table>
+  </div>
+
+  <div class="card">
+    <h2>Sensores de temperatura</h2>
+    <table><thead><tr><th>Etiqueta</th><th>Temp</th><th>Máx</th><th>Crítica</th></tr></thead><tbody>{}</tbody></table>
   </div>
 
   <div class="card">
@@ -198,9 +224,14 @@ footer{{color:var(--muted); font-size:12px; text-align:center; padding:18px}}
         self.hardware.memory.used_gb,
         self.hardware.memory.total_gb,
         self.hardware.uptime_secs,
+        self.hardware.load_avg_one,
+        self.hardware.load_avg_five,
+        self.hardware.load_avg_fifteen,
         self.hardware.disks.len(),
+        self.hardware.sensors.len(),
         disks_rows,
         net_ifaces,
+        sensors_rows,
         self.hosts.len(),
         self.network.total_vulnerabilities,
         hosts_rows,
