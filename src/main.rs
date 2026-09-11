@@ -2,6 +2,7 @@ mod hardware;
 mod network;
 mod report;
 mod scanner;
+mod serve;
 mod vuln;
 
 use std::path::PathBuf;
@@ -10,6 +11,35 @@ use std::time::Instant;
 #[tokio::main]
 async fn main() {
     let args: Vec<String> = std::env::args().collect();
+
+    // Modo servidor para AP: --serve 0.0.0.0:80, --serve=192.168.4.1:80, o --serve 192.168.4.1:80
+    let serve_addr = {
+        let mut addr: Option<String> = None;
+        for (i, a) in args.iter().enumerate() {
+            if a == "--serve" {
+                // --serve ADDR como dos args
+                if let Some(next) = args.get(i + 1) {
+                    if !next.starts_with("--") {
+                        addr = Some(next.clone());
+                        break;
+                    }
+                }
+                addr = Some("0.0.0.0:8080".to_string());
+                break;
+            } else if a.starts_with("--serve=") {
+                addr = Some(a.split('=').nth(1).unwrap_or("0.0.0.0:8080").to_string());
+                break;
+            }
+        }
+        addr
+    };
+    if let Some(addr) = serve_addr {
+        if let Err(e) = serve::serve(&addr).await {
+            eprintln!("Error serve: {}", e);
+        }
+        return;
+    }
+
     let do_scan = !args.contains(&"--no-scan".to_string());
     let out_json = args.iter().find_map(|a| {
         if a.starts_with("--json=") {
