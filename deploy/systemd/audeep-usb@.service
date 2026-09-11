@@ -1,0 +1,7 @@
+[Unit]
+Description=AuDeep - Copia reporte a USB %i
+After=audeep.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/audeep-usb.sh %i

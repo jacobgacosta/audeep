@@ -2,6 +2,7 @@ mod hardware;
 mod network;
 mod report;
 mod scanner;
+mod vuln;
 
 use std::path::PathBuf;
 use std::time::Instant;
@@ -60,14 +61,27 @@ async fn main() {
                         .collect::<Vec<_>>()
                         .join(", ")
                 };
+                let vuln_str = if h.vulnerabilities.is_empty() {
+                    "".to_string()
+                } else {
+                    format!(
+                        " | vulns: {}",
+                        h.vulnerabilities
+                            .iter()
+                            .map(|v| format!("{}({})", v.cve, v.severity))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    )
+                };
                 println!(
-                    "  - {} {} | MAC {} | vendor {} | {} ms | puertos: {}",
+                    "  - {} {} | MAC {} | vendor {} | {} ms | puertos: {}{}",
                     h.ip,
                     h.hostname.clone().unwrap_or_default(),
                     h.mac.clone().unwrap_or_else(|| "-".to_string()),
                     h.vendor.clone().unwrap_or_else(|| "-".to_string()),
                     h.latency_ms.map(|v| v.to_string()).unwrap_or_else(|| "-".to_string()),
-                    ports
+                    ports,
+                    vuln_str
                 );
             }
             hosts = discovered;
@@ -77,6 +91,7 @@ async fn main() {
             let start = Instant::now();
             let local_ip: std::net::IpAddr = "127.0.0.1".parse().unwrap();
             let open = scanner::scan_common_ports(local_ip, 400).await;
+            let vulns = vuln::check_host(&open);
             duration_secs = start.elapsed().as_secs_f64();
             hosts.push(network::HostInfo {
                 ip: "127.0.0.1".to_string(),
@@ -86,6 +101,7 @@ async fn main() {
                 is_alive: true,
                 open_ports: open,
                 latency_ms: Some(0),
+                vulnerabilities: vulns,
             });
         }
     } else {

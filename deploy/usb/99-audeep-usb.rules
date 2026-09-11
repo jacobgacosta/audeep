@@ -1,0 +1,4 @@
+# AuDeep - Auto-copia a USB al insertar pendrive
+# Colocar en /etc/udev/rules.d/99-audeep-usb.rules y recargar con: udevadm control --reload
+ACTION=="add", SUBSYSTEM=="block", KERNEL=="sd[a-z][0-9]", TAG+="systemd", ENV{SYSTEMD_WANTS}="audeep-usb@%k.service"
+ACTION=="add", SUBSYSTEM=="block", KERNEL=="sd[a-z]", TAG+="systemd", ENV{SYSTEMD_WANTS}="audeep-usb@%k.service"

@@ -1,0 +1,22 @@
+[Unit]
+Description=AuDeep - Auditor de Hardware y Red (Rust)
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=60
+StartLimitBurst=3
+
+[Service]
+Type=simple
+User=root
+ExecStart=/usr/local/bin/audeep --json=/var/lib/audeep/audeep_reporte.json --html=/var/lib/audeep/audeep_reporte.html
+ExecStartPost=/bin/bash -c 'echo "[AuDeep] Reporte generado $(date) - $(cat /var/lib/audeep/audeep_reporte.json | grep -o \"total_hosts_alive\":[0-9]*)" | systemd-cat -t audeep'
+Restart=on-failure
+RestartSec=30
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=audeep
+# Para parpadeo LED en Raspberry Pi (si existe)
+ExecStartPost=/bin/bash -c 'for i in 1 2 3; do echo 1 > /sys/class/leds/led0/brightness 2>/dev/null; sleep 0.2; echo 0 > /sys/class/leds/led0/brightness 2>/dev/null; sleep 0.2; done || true'
+
+[Install]
+WantedBy=multi-user.target

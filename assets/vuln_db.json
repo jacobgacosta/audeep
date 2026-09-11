@@ -1,0 +1,66 @@
+[
+  {
+    "cve": "CVE-2016-0777",
+    "severity": "alta",
+    "service": "SSH",
+    "affected": "OpenSSH < 7.1p2",
+    "description": "Information leak via roaming, permite leer memoria del cliente.",
+    "match_banner_contains": ["OpenSSH_6.", "OpenSSH_7.0", "OpenSSH_7.1p1"],
+    "recommendation": "Actualizar a OpenSSH >= 7.1p2"
+  },
+  {
+    "cve": "CVE-2018-15473",
+    "severity": "media",
+    "service": "SSH",
+    "affected": "OpenSSH < 7.7",
+    "description": "User enumeration via timing en auth.",
+    "match_banner_contains": ["OpenSSH_7.0", "OpenSSH_7.1", "OpenSSH_7.2", "OpenSSH_7.3", "OpenSSH_7.4", "OpenSSH_7.5", "OpenSSH_7.6"],
+    "recommendation": "Actualizar a OpenSSH >= 7.7"
+  },
+  {
+    "cve": "CVE-2017-0144",
+    "severity": "critica",
+    "service": "SMB",
+    "affected": "SMBv1 Windows < MS17-010",
+    "description": "EternalBlue - ejecución remota sin auth.",
+    "match_ports": [445, 139],
+    "match_banner_contains": [],
+    "recommendation": "Deshabilitar SMBv1, parche MS17-010, bloquear 445 desde WAN"
+  },
+  {
+    "cve": "CVE-2019-0708",
+    "severity": "critica",
+    "service": "RDP",
+    "affected": "Windows RDP < patch 2019-05",
+    "description": "BlueKeep - RCE wormable en RDP.",
+    "match_ports": [3389],
+    "recommendation": "Parchear RDP, habilitar NLA, no exponer 3389 a internet"
+  },
+  {
+    "cve": "CVE-2014-0160",
+    "severity": "alta",
+    "service": "HTTPS",
+    "affected": "OpenSSL 1.0.1 < 1.0.1g",
+    "description": "Heartbleed - lectura de memoria, robo de claves.",
+    "match_banner_contains": ["OpenSSL/1.0.1"],
+    "recommendation": "Actualizar OpenSSL, revocar certs, cambiar claves"
+  },
+  {
+    "cve": "CVE-2021-44228",
+    "severity": "critica",
+    "service": "HTTP",
+    "affected": "Log4j 2.0-2.14.1",
+    "description": "Log4Shell - RCE via JNDI en cabeceras HTTP.",
+    "match_banner_contains": ["Apache/2.4.49", "Apache/2.4.50"],
+    "recommendation": "Actualizar Log4j >= 2.17, WAF, revisar logs"
+  },
+  {
+    "cve": "CVE-2023-38408",
+    "severity": "alta",
+    "service": "SSH",
+    "affected": "OpenSSH < 9.3p2 (forwarded ssh-agent)",
+    "description": "RCE en ssh-agent PKCS#11.",
+    "match_banner_contains": ["OpenSSH_8.", "OpenSSH_9.0", "OpenSSH_9.1", "OpenSSH_9.2", "OpenSSH_9.3p1"],
+    "recommendation": "Actualizar a OpenSSH >= 9.3p2"
+  }
+]

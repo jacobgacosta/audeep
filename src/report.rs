@@ -18,11 +18,13 @@ pub struct NetworkSummary {
     pub local_subnet: Option<String>,
     pub total_hosts_alive: usize,
     pub scan_duration_secs: f64,
+    pub total_vulnerabilities: usize,
 }
 
 impl AuditReport {
     pub fn new(hardware: HardwareReport, hosts: Vec<HostInfo>, local_subnet: Option<String>, duration_secs: f64) -> Self {
         let total = hosts.len();
+        let total_vulns = hosts.iter().map(|h| h.vulnerabilities.len()).sum();
         Self {
             generated_at: Utc::now(),
             hardware,
@@ -30,6 +32,7 @@ impl AuditReport {
                 local_subnet,
                 total_hosts_alive: total,
                 scan_duration_secs: duration_secs,
+                total_vulnerabilities: total_vulns,
             },
             hosts,
         }
@@ -55,17 +58,39 @@ impl AuditReport {
                     format!("<span class='tag'>{}{} {}{}</span>", p.port, svc, p.state, banner)
                 }).collect::<Vec<_>>().join(" ")
             };
+            let vulns = if h.vulnerabilities.is_empty() {
+                "<span class='muted'>—</span>".to_string()
+            } else {
+                h.vulnerabilities.iter().map(|v| {
+                    let color = match v.severity.as_str() {
+                        "critica" => "#ef4444",
+                        "alta" => "#f59e0b",
+                        "media" => "#eab308",
+                        _ => "#9aa4b2",
+                    };
+                    format!(
+                        "<span class='tag' style='border-color:{}'><b>{}</b> <span style='color:{}'>{}</span> :{}<br><small>{}</small></span>",
+                        color,
+                        html_escape(&v.cve),
+                        color,
+                        html_escape(&v.severity),
+                        v.port,
+                        html_escape(&v.description)
+                    )
+                }).collect::<Vec<_>>().join(" ")
+            };
             let vendor = h.vendor.clone().unwrap_or_else(|| "—".to_string());
             let mac = h.mac.clone().unwrap_or_else(|| "—".to_string());
             let latency = h.latency_ms.map(|v| format!("{} ms", v)).unwrap_or_else(|| "—".to_string());
             format!(
-                "<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>",
+                "<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>",
                 html_escape(&h.ip),
                 html_escape(&h.hostname.clone().unwrap_or_else(|| "—".to_string())),
                 html_escape(&mac),
                 html_escape(&vendor),
                 latency,
-                ports
+                ports,
+                vulns
             )
         }).collect::<Vec<_>>().join("\n");
 
@@ -86,6 +111,9 @@ impl AuditReport {
         }).collect::<Vec<_>>().join("\n");
 
         let subnet = self.network.local_subnet.clone().unwrap_or_else(|| "no detectada".to_string());
+        let oui_count: usize = serde_json::from_str::<std::collections::HashMap<String, String>>(include_str!("../assets/oui.json"))
+            .map(|m| m.len())
+            .unwrap_or(0);
 
         format!(r#"<!DOCTYPE html>
 <html lang="es">
@@ -141,9 +169,9 @@ footer{{color:var(--muted); font-size:12px; text-align:center; padding:18px}}
   </div>
 
   <div class="card">
-    <h2>Hosts en la red ({} vivos)</h2>
-    <table><thead><tr><th>IP</th><th>Hostname</th><th>MAC</th><th>Fabricante (OUI)</th><th>Latencia</th><th>Puertos abiertos</th></tr></thead><tbody>{}</tbody></table>
-    <p class="muted" style="margin-top:10px">Nota: MAC y fabricante requieren lectura de tabla ARP (sin privilegios). Para mapeo completo OUI, ampliar base en <code>network.rs:oui_db()</code>. Puertos escaneados: {}</p>
+    <h2>Hosts en la red ({} vivos) — {} hallazgos</h2>
+    <table><thead><tr><th>IP</th><th>Hostname</th><th>MAC</th><th>Fabricante (OUI)</th><th>Latencia</th><th>Puertos abiertos</th><th>Vulnerabilidades</th></tr></thead><tbody>{}</tbody></table>
+    <p class="muted" style="margin-top:10px">Nota: MAC y fabricante requieren lectura de tabla ARP (sin privilegios). OUI DB: <code>assets/oui.json</code> ({} entradas). Puertos escaneados: {} · Vuln DB: <code>assets/vuln_db.json</code></p>
   </div>
 </div>
 <footer>AuDeep v0.1.0 · Rust · Reporte offline listo para USB/Raspberry Pi</footer>
@@ -170,7 +198,9 @@ footer{{color:var(--muted); font-size:12px; text-align:center; padding:18px}}
         disks_rows,
         net_ifaces,
         self.hosts.len(),
+        self.network.total_vulnerabilities,
         hosts_rows,
+        oui_count,
         crate::scanner::COMMON_PORTS.iter().map(|p| p.to_string()).collect::<Vec<_>>().join(", ")
         )
     }

@@ -1,4 +1,5 @@
 use crate::scanner::{self, PortResult};
+use crate::vuln::Finding;
 use serde::Serialize;
 use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr, UdpSocket};
@@ -12,34 +13,14 @@ pub struct HostInfo {
     pub is_alive: bool,
     pub open_ports: Vec<PortResult>,
     pub latency_ms: Option<u128>,
+    #[serde(default)]
+    pub vulnerabilities: Vec<Finding>,
 }
 
-// Base de datos OUI mínima embebida (muestra). Para producción usar base completa IEEE.
-fn oui_db() -> HashMap<&'static str, &'static str> {
-    let mut m = HashMap::new();
-    m.insert("54:14:F3", "AzureWave / Realtek (common WiFi)");
-    m.insert("00:15:5D", "Microsoft (Hyper-V)");
-    m.insert("00:50:56", "VMware");
-    m.insert("0A:00:27", "VirtualBox");
-    m.insert("3C:22:FB", "Apple");
-    m.insert("F4:5C:89", "Apple");
-    m.insert("FC:FB:FB", "Apple");
-    m.insert("A4:5E:60", "Apple");
-    m.insert("B8:27:EB", "Raspberry Pi Foundation");
-    m.insert("D8:3A:DD", "Raspberry Pi");
-    m.insert("DC:A6:32", "Raspberry Pi");
-    m.insert("E4:5F:01", "Raspberry Pi");
-    m.insert("2C:CF:67", "Espressif (ESP32)");
-    m.insert("24:6F:28", "Espressif");
-    m.insert("30:AE:A4", "Espressif");
-    m.insert("84:CC:A8", "Espressif");
-    m.insert("48:27:E2", "Xiaomi");
-    m.insert("64:CC:2E", "Xiaomi");
-    m.insert("7C:2F:80", "Xiaomi");
-    m.insert("00:1A:11", "Google");
-    m.insert("F4:F5:D8", "Google Nest");
-    m.insert("18:B4:30", "Nest Labs");
-    m
+static OUI_JSON: &str = include_str!("../assets/oui.json");
+
+fn oui_db() -> HashMap<String, String> {
+    serde_json::from_str::<HashMap<String, String>>(OUI_JSON).unwrap_or_default()
 }
 
 pub fn lookup_vendor(mac: &str) -> Option<String> {
@@ -48,7 +29,14 @@ pub fn lookup_vendor(mac: &str) -> Option<String> {
     if prefix.len() != 8 {
         return None;
     }
-    oui_db().get(prefix.as_str()).map(|v| v.to_string())
+    // La DB tiene claves en formato XX:XX:XX ya en mayúsculas
+    let db = oui_db();
+    db.get(&prefix).cloned().or_else(|| {
+        // fallback a búsqueda case-insensitive para DB antigua
+        db.iter()
+            .find(|(k, _)| k.to_uppercase() == prefix)
+            .map(|(_, v)| v.clone())
+    })
 }
 
 fn get_local_ipv4() -> Option<Ipv4Addr> {
@@ -90,8 +78,7 @@ pub fn hosts_in_subnet(ip: Ipv4Addr, prefix_len: u8) -> Vec<Ipv4Addr> {
 
 async fn is_host_alive(ip: IpAddr, timeout_ms: u64) -> (bool, Option<u128>) {
     let start = std::time::Instant::now();
-    // Heurística rápida: intentar 80 y 445 con timeout corto. Si alguno abre, está vivo.
-    // Evita depender de ICMP que requiere privilegios.
+    // Heurística rápida: intentar 80,445,22,53 con timeout corto. Si alguno abre, está vivo.
     let ports = [80, 445, 22, 53];
     for &port in &ports {
         let res = scanner::scan_port(ip, port, timeout_ms).await;
@@ -99,9 +86,42 @@ async fn is_host_alive(ip: IpAddr, timeout_ms: u64) -> (bool, Option<u128>) {
             return (true, Some(start.elapsed().as_millis()));
         }
     }
-    // Fallback: intenta conectar a 80 con timeout un poco mayor y mide si hay respuesta (aunque cerrado, si hay RST rápido indica host vivo vs timeout)
-    // Simplificamos: si no abrió nada, lo marcamos no vivo por ahora
+    // Fallback ICMP ping via comando del sistema (no requiere raw sockets si hay binario ping)
+    if ping_host(ip, timeout_ms).await {
+        return (true, Some(start.elapsed().as_millis()));
+    }
     (false, None)
+}
+
+async fn ping_host(ip: IpAddr, timeout_ms: u64) -> bool {
+    let ip_str = ip.to_string();
+    // Windows: ping -n 1 -w <ms>  | Unix: ping -c 1 -W <sec>
+    #[cfg(target_os = "windows")]
+    let mut cmd = {
+        let timeout_arg = format!("{}", timeout_ms);
+        let mut c = tokio::process::Command::new("ping");
+        c.args(["-n", "1", "-w", &timeout_arg, &ip_str]);
+        c
+    };
+    #[cfg(not(target_os = "windows"))]
+    let mut cmd = {
+        let secs = ((timeout_ms + 999) / 1000).to_string();
+        let mut c = tokio::process::Command::new("ping");
+        c.args(["-c", "1", "-W", &secs, &ip_str]);
+        c
+    };
+
+    // Evitar colgarse: timeout global 1.5x
+    let res = tokio::time::timeout(
+        std::time::Duration::from_millis(timeout_ms + 500),
+        cmd.output(),
+    )
+    .await;
+
+    match res {
+        Ok(Ok(out)) => out.status.success(),
+        _ => false,
+    }
 }
 
 pub async fn discover_hosts(timeout_ms: u64, max_concurrency: usize) -> Vec<HostInfo> {
@@ -128,14 +148,16 @@ pub async fn discover_hosts(timeout_ms: u64, max_concurrency: usize) -> Vec<Host
             if alive {
                 // para hosts vivos, hacer escaneo rápido de puertos comunes
                 let open_ports = scanner::scan_common_ports(IpAddr::V4(ip), timeout_ms).await;
+                let vulnerabilities = crate::vuln::check_host(&open_ports);
                 HostInfo {
                     ip: ip.to_string(),
-                    hostname: None, // resolución inversa opcional: lookup_address
-                    mac: None,      // requiere ARP table o raw sockets (privilegios)
+                    hostname: None,
+                    mac: None,
                     vendor: None,
                     is_alive: true,
                     open_ports,
                     latency_ms: latency,
+                    vulnerabilities,
                 }
             } else {
                 HostInfo {
@@ -146,6 +168,7 @@ pub async fn discover_hosts(timeout_ms: u64, max_concurrency: usize) -> Vec<Host
                     is_alive: false,
                     open_ports: Vec::new(),
                     latency_ms: latency,
+                    vulnerabilities: Vec::new(),
                 }
             }
         }));
@@ -162,6 +185,7 @@ pub async fn discover_hosts(timeout_ms: u64, max_concurrency: usize) -> Vec<Host
 
     // Añadir host local al inicio
     let local_open = scanner::scan_common_ports(IpAddr::V4(local_ip), timeout_ms).await;
+    let local_vulns = crate::vuln::check_host(&local_open);
     alive_hosts.insert(
         0,
         HostInfo {
@@ -172,6 +196,7 @@ pub async fn discover_hosts(timeout_ms: u64, max_concurrency: usize) -> Vec<Host
             is_alive: true,
             open_ports: local_open,
             latency_ms: Some(0),
+            vulnerabilities: local_vulns,
         },
     );
 
@@ -226,5 +251,47 @@ pub fn enrich_with_arp(mut hosts: Vec<HostInfo>) -> Vec<HostInfo> {
             h.vendor = lookup_vendor(mac);
         }
     }
+    // Merge: añadir hosts que están en ARP pero no fueron detectados como vivos por TCP/ping
+    // (ej. dispositivos silenciosos que no exponen puertos 80/445 pero sí responden ARP)
+    let alive_ips: std::collections::HashSet<String> = hosts.iter().map(|h| h.ip.clone()).collect();
+    for (ip, mac) in arp.iter() {
+        // filtrar solo IPs de la misma subred y no multicast/broadcast
+        if alive_ips.contains(ip) {
+            continue;
+        }
+        if ip.parse::<IpAddr>().is_err() {
+            continue;
+        }
+        // Evitar multicast, broadcast y network
+        if ip.starts_with("224.") || ip.starts_with("239.") || ip == "0.0.0.0" {
+            continue;
+        }
+        // Filtrar .0 (network) y .255 (broadcast) de la subred local
+        if ip.ends_with(".0") || ip.ends_with(".255") {
+            continue;
+        }
+        // Solo añadir si pertenece a la subred local aproximada (/24 del host)
+        if let Some(local) = get_local_ipv4() {
+            let local_oct = local.octets();
+            if let Ok(parsed) = ip.parse::<Ipv4Addr>() {
+                let oct = parsed.octets();
+                if oct[0] != local_oct[0] || oct[1] != local_oct[1] || oct[2] != local_oct[2] {
+                    continue;
+                }
+            }
+        }
+        let vendor = lookup_vendor(mac);
+        hosts.push(HostInfo {
+            ip: ip.clone(),
+            hostname: None,
+            mac: Some(mac.clone()),
+            vendor,
+            is_alive: true,
+            open_ports: Vec::new(),
+            latency_ms: None,
+            vulnerabilities: Vec::new(),
+        });
+    }
+    hosts.sort_by(|a, b| a.ip.cmp(&b.ip));
     hosts
 }
