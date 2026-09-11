@@ -82,15 +82,19 @@ impl AuditReport {
             let vendor = h.vendor.clone().unwrap_or_else(|| "—".to_string());
             let mac = h.mac.clone().unwrap_or_else(|| "—".to_string());
             let latency = h.latency_ms.map(|v| format!("{} ms", v)).unwrap_or_else(|| "—".to_string());
+            let mdns = if h.mdns_names.is_empty() { "—".to_string() } else { h.mdns_names.iter().map(|n| html_escape(n)).collect::<Vec<_>>().join("<br>") };
+            let ssdp = h.ssdp_location.clone().map(|s| html_escape(&s)).unwrap_or_else(|| "—".to_string());
             format!(
-                "<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>",
+                "<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>",
                 html_escape(&h.ip),
                 html_escape(&h.hostname.clone().unwrap_or_else(|| "—".to_string())),
                 html_escape(&mac),
                 html_escape(&vendor),
                 latency,
                 ports,
-                vulns
+                vulns,
+                mdns,
+                ssdp
             )
         }).collect::<Vec<_>>().join("\n");
 
@@ -137,6 +141,7 @@ impl AuditReport {
                     .map(|m| m.len())
                     .unwrap_or(0)
             });
+        let cve_count = crate::vuln::load_db().len();
 
         format!(r#"<!DOCTYPE html>
 <html lang="es">
@@ -200,8 +205,8 @@ footer{{color:var(--muted); font-size:12px; text-align:center; padding:18px}}
 
   <div class="card">
     <h2>Hosts en la red ({} vivos) — {} hallazgos</h2>
-    <table><thead><tr><th>IP</th><th>Hostname</th><th>MAC</th><th>Fabricante (OUI)</th><th>Latencia</th><th>Puertos abiertos</th><th>Vulnerabilidades</th></tr></thead><tbody>{}</tbody></table>
-    <p class="muted" style="margin-top:10px">Nota: MAC y fabricante requieren lectura de tabla ARP (sin privilegios). OUI DB: <code>assets/oui.json</code> ({} entradas). Puertos escaneados: {} · Vuln DB: <code>assets/vuln_db.json</code></p>
+    <table><thead><tr><th>IP</th><th>Hostname</th><th>MAC</th><th>Fabricante (OUI)</th><th>Latencia</th><th>Puertos abiertos</th><th>Vulnerabilidades</th><th>mDNS</th><th>SSDP</th></tr></thead><tbody>{}</tbody></table>
+    <p class="muted" style="margin-top:10px">Nota: MAC y fabricante requieren lectura de tabla ARP (sin privilegios). OUI DB: <code>assets/oui_full.json</code> ({} entradas, + <code>cve.db</code> SQLite {} vulns). Puertos escaneados: {} · Vuln DB: <code>assets/cve.db</code> (fallback <code>vuln_db.json</code>) · mDNS/SSDP 1.2s</p>
   </div>
 </div>
 <footer>AuDeep v0.1.0 · Rust · Reporte offline listo para USB/Raspberry Pi</footer>
@@ -236,6 +241,7 @@ footer{{color:var(--muted); font-size:12px; text-align:center; padding:18px}}
         self.network.total_vulnerabilities,
         hosts_rows,
         oui_count,
+        cve_count,
         crate::scanner::COMMON_PORTS.iter().map(|p| p.to_string()).collect::<Vec<_>>().join(", ")
         )
     }

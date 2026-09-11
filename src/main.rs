@@ -79,6 +79,7 @@ async fn main() {
             let start = Instant::now();
             let mut discovered = network::discover_hosts(400, 64).await;
             discovered = network::enrich_with_arp(discovered).await;
+            discovered = network::enrich_with_mdns_ssdp(discovered, 1200).await;
             duration_secs = start.elapsed().as_secs_f64();
             println!("Hosts vivos: {}", discovered.len());
             for h in &discovered {
@@ -132,6 +133,8 @@ async fn main() {
                 open_ports: open,
                 latency_ms: Some(0),
                 vulnerabilities: vulns,
+                mdns_names: Vec::new(),
+                ssdp_location: None,
             });
         }
     } else {

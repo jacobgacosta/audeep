@@ -15,6 +15,10 @@ pub struct HostInfo {
     pub latency_ms: Option<u128>,
     #[serde(default)]
     pub vulnerabilities: Vec<Finding>,
+    #[serde(default)]
+    pub mdns_names: Vec<String>,
+    #[serde(default)]
+    pub ssdp_location: Option<String>,
 }
 
 static OUI_JSON_SMALL: &str = include_str!("../assets/oui.json");
@@ -208,7 +212,7 @@ pub async fn discover_hosts(timeout_ms: u64, max_concurrency: usize) -> Vec<Host
                 let open_ports = scanner::scan_common_ports(IpAddr::V4(ip), timeout_ms).await;
                 let vulnerabilities = crate::vuln::check_host(&open_ports);
                 let hostname = try_resolve_hostname(IpAddr::V4(ip)).await;
-                HostInfo {
+                    HostInfo {
                     ip: ip.to_string(),
                     hostname,
                     mac: None,
@@ -217,6 +221,8 @@ pub async fn discover_hosts(timeout_ms: u64, max_concurrency: usize) -> Vec<Host
                     open_ports,
                     latency_ms: latency,
                     vulnerabilities,
+                    mdns_names: Vec::new(),
+                    ssdp_location: None,
                 }
             } else {
                 HostInfo {
@@ -228,6 +234,8 @@ pub async fn discover_hosts(timeout_ms: u64, max_concurrency: usize) -> Vec<Host
                     open_ports: Vec::new(),
                     latency_ms: latency,
                     vulnerabilities: Vec::new(),
+                    mdns_names: Vec::new(),
+                    ssdp_location: None,
                 }
             }
         }));
@@ -256,6 +264,8 @@ pub async fn discover_hosts(timeout_ms: u64, max_concurrency: usize) -> Vec<Host
             open_ports: local_open,
             latency_ms: Some(0),
             vulnerabilities: local_vulns,
+            mdns_names: Vec::new(),
+            ssdp_location: None,
         },
     );
 
@@ -360,6 +370,190 @@ pub async fn enrich_with_arp(mut hosts: Vec<HostInfo>) -> Vec<HostInfo> {
             open_ports: Vec::new(),
             latency_ms: None,
             vulnerabilities: Vec::new(),
+            mdns_names: Vec::new(),
+            ssdp_location: None,
+        });
+    }
+    hosts.sort_by(|a, b| a.ip.cmp(&b.ip));
+    hosts
+}
+
+pub async fn discover_mdns_map(timeout_ms: u64) -> HashMap<String, Vec<String>> {
+    let timeout_ms = timeout_ms.min(3000);
+    let result = tokio::task::spawn_blocking(move || {
+        let mut map: HashMap<String, Vec<String>> = HashMap::new();
+        let mdns = match mdns_sd::ServiceDaemon::new() {
+            Ok(d) => d,
+            Err(_) => return map,
+        };
+        let service_types = [
+            "_http._tcp.local.",
+            "_https._tcp.local.",
+            "_ipp._tcp.local.",
+            "_ipps._tcp.local.",
+            "_smb._tcp.local.",
+            "_afpovertcp._tcp.local.",
+            "_hap._tcp.local.",
+            "_esphomelib._tcp.local.",
+            "_googlecast._tcp.local.",
+        ];
+        let mut receivers = Vec::new();
+        for st in service_types.iter() {
+            if let Ok(r) = mdns.browse(st) {
+                receivers.push(r);
+            }
+        }
+        let deadline = std::time::Instant::now() + std::time::Duration::from_millis(timeout_ms);
+        while std::time::Instant::now() < deadline {
+            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+            let wait = remaining.min(std::time::Duration::from_millis(200));
+            for rx in &receivers {
+                while let Ok(event) = rx.recv_timeout(wait) {
+                    if let mdns_sd::ServiceEvent::ServiceResolved(info) = event {
+                        let hostname = info.get_hostname().trim_end_matches('.').to_string();
+                        for addr in info.get_addresses() {
+                            let ip_str = addr.to_string();
+                            map.entry(ip_str).or_default().push(hostname.clone());
+                            // también mapear fullname
+                            let fullname = info.get_fullname().trim_end_matches('.').to_string();
+                            if fullname != hostname {
+                                if let Some(v) = map.get_mut(&addr.to_string()) {
+                                    if !v.contains(&fullname) { v.push(fullname.clone()); }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        let _ = mdns.shutdown();
+        map
+    })
+    .await;
+    result.unwrap_or_default()
+}
+
+pub async fn discover_ssdp_map(timeout_ms: u64) -> HashMap<String, String> {
+    use tokio::net::UdpSocket;
+    let mut map: HashMap<String, String> = HashMap::new();
+    let sock = match UdpSocket::bind("0.0.0.0:0").await {
+        Ok(s) => s,
+        Err(_) => return map,
+    };
+    let _ = sock.set_broadcast(true);
+    let msearch = b"M-SEARCH * HTTP/1.1\r\nHOST: 239.255.255.250:1900\r\nMAN: \"ssdp:discover\"\r\nST: ssdp:all\r\nMX: 2\r\n\r\n";
+    let _ = sock.send_to(msearch, "239.255.255.250:1900").await;
+    // reintento para dispositivos lentos
+    let sock_clone = std::sync::Arc::new(sock);
+    let s2 = sock_clone.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+        let _ = s2.send_to(msearch, "239.255.255.250:1900").await;
+    });
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_millis(timeout_ms.min(3000));
+    let mut buf = vec![0u8; 2048];
+    while tokio::time::Instant::now() < deadline {
+        let remaining = deadline - tokio::time::Instant::now();
+        let recv_fut = sock_clone.recv_from(&mut buf);
+        match tokio::time::timeout(remaining.min(std::time::Duration::from_millis(400)), recv_fut).await {
+            Ok(Ok((n, peer))) => {
+                let text = String::from_utf8_lossy(&buf[..n]);
+                let mut location = None;
+                let mut server = None;
+                for line in text.lines() {
+                    let l = line.trim();
+                    if l.to_uppercase().starts_with("LOCATION:") {
+                        location = Some(l[9..].trim().to_string());
+                    } else if l.to_uppercase().starts_with("SERVER:") {
+                        server = Some(l[7..].trim().to_string());
+                    } else if l.to_uppercase().starts_with("ST:") || l.to_uppercase().starts_with("NT:") {
+                        // service type, podría usarse para vendor
+                    }
+                }
+                let ip = peer.ip().to_string();
+                let val = location.or(server).unwrap_or_else(|| text.lines().next().unwrap_or("").to_string());
+                if !val.is_empty() {
+                    map.entry(ip).or_insert(val);
+                }
+            }
+            _ => break,
+        }
+    }
+    map
+}
+
+pub async fn enrich_with_mdns_ssdp(mut hosts: Vec<HostInfo>, timeout_ms: u64) -> Vec<HostInfo> {
+    // Ejecutar mDNS y SSDP en paralelo
+    let (mdns_map, ssdp_map) = tokio::join!(discover_mdns_map(timeout_ms), discover_ssdp_map(timeout_ms));
+    let existing_ips: std::collections::HashSet<String> = hosts.iter().map(|h| h.ip.clone()).collect();
+    // Enriquecer hosts existentes
+    for h in &mut hosts {
+        if let Some(names) = mdns_map.get(&h.ip) {
+            h.mdns_names = names.clone();
+            if h.hostname.is_none() && !names.is_empty() {
+                h.hostname = Some(names[0].clone());
+            }
+        }
+        if let Some(loc) = ssdp_map.get(&h.ip) {
+            h.ssdp_location = Some(loc.clone());
+            // Si no hay vendor, intentar inferir de SSDP server
+            if h.vendor.is_none() && (loc.to_lowercase().contains("xiaomi") || loc.to_lowercase().contains("tenda") || loc.to_lowercase().contains("espressif")) {
+                // vendor ya resuelto por OUI, pero dejamos ssdp como pista
+            }
+        }
+    }
+    // Añadir hosts descubiertos solo por mDNS/SSDP que no estaban en lista (ej. impresoras silenciosas)
+    for (ip, names) in mdns_map {
+        if existing_ips.contains(&ip) { continue; }
+        if ip.parse::<IpAddr>().is_err() { continue; }
+        if ip.starts_with("224.") || ip.starts_with("239.") { continue; }
+        if ip.ends_with(".0") || ip.ends_with(".255") { continue; }
+        if let Some(local) = get_local_ipv4() {
+            if let Ok(parsed) = ip.parse::<Ipv4Addr>() {
+                let lo = local.octets();
+                let o = parsed.octets();
+                if o[0]!=lo[0] || o[1]!=lo[1] || o[2]!=lo[2] { continue; }
+            }
+        }
+        let hostname = names.first().cloned();
+        hosts.push(HostInfo {
+            ip: ip.clone(),
+            hostname,
+            mac: None,
+            vendor: None,
+            is_alive: true,
+            open_ports: Vec::new(),
+            latency_ms: None,
+            vulnerabilities: Vec::new(),
+            mdns_names: names,
+            ssdp_location: ssdp_map.get(&ip).cloned(),
+        });
+    }
+    for (ip, loc) in ssdp_map {
+        if existing_ips.contains(&ip) { continue; }
+        if hosts.iter().any(|h| h.ip==ip) { continue; }
+        if ip.parse::<IpAddr>().is_err() { continue; }
+        if ip.starts_with("224.") || ip.starts_with("239.") { continue; }
+        if ip.ends_with(".0") || ip.ends_with(".255") { continue; }
+        if let Some(local) = get_local_ipv4() {
+            if let Ok(parsed) = ip.parse::<Ipv4Addr>() {
+                let lo = local.octets();
+                let o = parsed.octets();
+                if o[0]!=lo[0] || o[1]!=lo[1] || o[2]!=lo[2] { continue; }
+            }
+        }
+        hosts.push(HostInfo {
+            ip: ip.clone(),
+            hostname: None,
+            mac: None,
+            vendor: None,
+            is_alive: true,
+            open_ports: Vec::new(),
+            latency_ms: None,
+            vulnerabilities: Vec::new(),
+            mdns_names: Vec::new(),
+            ssdp_location: Some(loc),
         });
     }
     hosts.sort_by(|a, b| a.ip.cmp(&b.ip));

@@ -11,3 +11,5 @@ serde_json = "1.0"
 chrono = { version = "0.4", features = ["serde"] }
 hostname = "0.4"
 dns-lookup = "2.0"
+rusqlite = { version = "0.31", features = ["bundled"] }
+mdns-sd = "0.11"
