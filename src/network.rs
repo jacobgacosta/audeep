@@ -17,26 +17,54 @@ pub struct HostInfo {
     pub vulnerabilities: Vec<Finding>,
 }
 
-static OUI_JSON: &str = include_str!("../assets/oui.json");
+static OUI_JSON_SMALL: &str = include_str!("../assets/oui.json");
+static OUI_JSON_FULL: &str = include_str!("../assets/oui_full.json");
 
-fn oui_db() -> HashMap<String, String> {
-    serde_json::from_str::<HashMap<String, String>>(OUI_JSON).unwrap_or_default()
+fn oui_db() -> &'static HashMap<String, String> {
+    use std::sync::OnceLock;
+    static CACHE: OnceLock<HashMap<String, String>> = OnceLock::new();
+    CACHE.get_or_init(|| {
+        // Intentar full primero, fallback a small
+        let mut map: HashMap<String, String> = serde_json::from_str(OUI_JSON_FULL).unwrap_or_default();
+        if map.is_empty() {
+            map = serde_json::from_str(OUI_JSON_SMALL).unwrap_or_default();
+        } else {
+            // Merge small (curated) sobreescribe full para casos especiales como Router Tenda
+            if let Ok(small) = serde_json::from_str::<HashMap<String, String>>(OUI_JSON_SMALL) {
+                for (k, v) in small {
+                    map.insert(k, v);
+                }
+            }
+        }
+        map
+    })
 }
 
 pub fn lookup_vendor(mac: &str) -> Option<String> {
     let clean = mac.to_uppercase().replace('-', ":");
-    let prefix = clean.split(':').take(3).collect::<Vec<_>>().join(":");
+    let parts: Vec<&str> = clean.split(':').collect();
+    if parts.len() < 3 {
+        return None;
+    }
+    let prefix = parts[..3].join(":");
     if prefix.len() != 8 {
         return None;
     }
-    // La DB tiene claves en formato XX:XX:XX ya en mayúsculas
-    let db = oui_db();
-    db.get(&prefix).cloned().or_else(|| {
-        // fallback a búsqueda case-insensitive para DB antigua
-        db.iter()
-            .find(|(k, _)| k.to_uppercase() == prefix)
-            .map(|(_, v)| v.clone())
-    })
+    if let Some(v) = oui_db().get(&prefix) {
+        return Some(v.clone());
+    }
+    // Detectar MAC localmente administrada (bit 1 del primer octeto)
+    // Segundo hex digit: 2,6,A,E indica locally administered
+    if let Some(first_octet) = parts.first() {
+        if first_octet.len() == 2 {
+            if let Ok(byte) = u8::from_str_radix(first_octet, 16) {
+                if byte & 0x02 != 0 {
+                    return Some("Locally Administered (virtual/docker)".to_string());
+                }
+            }
+        }
+    }
+    None
 }
 
 fn get_local_ipv4() -> Option<Ipv4Addr> {

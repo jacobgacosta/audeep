@@ -111,9 +111,13 @@ impl AuditReport {
         }).collect::<Vec<_>>().join("\n");
 
         let subnet = self.network.local_subnet.clone().unwrap_or_else(|| "no detectada".to_string());
-        let oui_count: usize = serde_json::from_str::<std::collections::HashMap<String, String>>(include_str!("../assets/oui.json"))
+        let oui_count: usize = serde_json::from_str::<std::collections::HashMap<String, String>>(include_str!("../assets/oui_full.json"))
             .map(|m| m.len())
-            .unwrap_or(0);
+            .unwrap_or_else(|_| {
+                serde_json::from_str::<std::collections::HashMap<String, String>>(include_str!("../assets/oui.json"))
+                    .map(|m| m.len())
+                    .unwrap_or(0)
+            });
 
         format!(r#"<!DOCTYPE html>
 <html lang="es">
