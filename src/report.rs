@@ -188,35 +188,34 @@ impl AuditReport {
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>AuDeep — Reporte Mamón</title>
 <style>
-:root {{ --bg:#060a14; --bg2:#0b1220; --fg:#e6edf3; --muted:#9aa4b2; --card:#0f172a; --card2:#111c36; --accent:#38bdf8; --accent2:#818cf8; --border:#1e293b; --crit:#ef4444; --alta:#f59e0b; --media:#eab308; --baja:#22c55e; }}
-*{{box-sizing:border-box}} body{{margin:0;font-family: ui-sans-serif,system-ui,Segoe UI,Roboto,Helvetica,Arial; background: radial-gradient(1200px 600px at 20% -10%, #1e293b 0%, transparent 60%), radial-gradient(1000px 500px at 100% 0%, #1e1b4b 0%, transparent 50%), linear-gradient(180deg, var(--bg), var(--bg2)); color:var(--fg); min-height:100vh;}}
-header{{padding:28px 20px 18px; border-bottom:1px solid var(--border); position:sticky; top:0; z-index:10; backdrop-filter: blur(12px); background:rgba(6,10,20,0.85)}}
-h1{{margin:0;font-size:24px; letter-spacing:0.3px; background: linear-gradient(90deg, #38bdf8, #818cf8, #c084fc); -webkit-background-clip:text; -webkit-text-fill-color:transparent; font-weight:800}} .sub{{color:var(--muted); font-size:13px; margin-top:6px}}
+:root {{ --bg:#fdfbf7; --bg2:#f5f1e8; --fg:#1c1917; --muted:#78716c; --card:#ffffff; --card2:#fffbeb; --accent:#0ea5e9; --accent2:#e11d48; --border:#e7e5e4; --crit:#dc2626; --alta:#d97706; --media:#ca8a04; --baja:#16a34a; }}
+*{{box-sizing:border-box}} body{{margin:0;font-family: ui-sans-serif,system-ui,Segoe UI,Roboto,Helvetica,Arial; background: var(--bg); color:var(--fg); min-height:100vh;}}
+header{{padding:24px 20px 16px; border-bottom:1px solid var(--border); position:sticky; top:0; z-index:10; backdrop-filter: blur(8px); background:rgba(253,251,247,0.92)}} 
+h1{{margin:0;font-size:22px; letter-spacing:-0.3px; color:#1c1917; font-weight:800; font-family: ui-monospace, SFMono-Regular, Menlo, monospace}} h1 span{{color:var(--accent2)}} .sub{{color:var(--muted); font-size:12px; margin-top:4px; font-family: ui-monospace, monospace}}
 .wrap{{max-width:1200px; margin:0 auto; padding:20px}}
-.card{{background: linear-gradient(180deg, var(--card), var(--card2)); border:1px solid var(--border); border-radius:18px; padding:18px; margin-bottom:18px; box-shadow: 0 8px 30px rgba(0,0,0,0.35)}}
-.card h2{{margin:0 0 12px 0; font-size:15px; letter-spacing:0.4px; text-transform:uppercase; color:var(--muted)}}
-.grid{{display:grid; gap:12px; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr))}}
-.kv{{background:rgba(15,23,42,0.9); border:1px solid var(--border); border-radius:14px; padding:14px; position:relative; overflow:hidden}} .kv::after{{content:""; position:absolute; inset:0; background: radial-gradient(400px 100px at 100% 0%, rgba(56,189,248,0.12), transparent 60%); pointer-events:none}}
-.kv .k{{color:var(--muted); font-size:11px; text-transform:uppercase; letter-spacing:0.6px}} .kv .v{{font-weight:700; margin-top:6px; font-size:18px}} .kv .v small{{font-weight:500; color:var(--muted); font-size:12px}}
-.stats{{display:grid; grid-template-columns: repeat(4, 1fr); gap:12px; margin-bottom:12px}} @media(max-width:800px){{.stats{{grid-template-columns: repeat(2,1fr)}}}}
-.stat{{background: linear-gradient(135deg, #0f172a, #1e293b); border:1px solid var(--border); border-radius:16px; padding:16px; text-align:center}} .stat .num{{font-size:28px; font-weight:800; line-height:1}} .stat .lbl{{color:var(--muted); font-size:12px; margin-top:4px; text-transform:uppercase; letter-spacing:0.5px}}
-.charts{{display:grid; grid-template-columns: 1.1fr 1fr 1fr; gap:12px; margin-bottom:18px}} @media(max-width:900px){{.charts{{grid-template-columns:1fr}}}}
-.chartBox{{background: var(--card); border:1px solid var(--border); border-radius:14px; padding:12px}} .chartBox h3{{margin:0 0 8px 0; font-size:12px; color:var(--muted); text-transform:uppercase; letter-spacing:0.5px}}
+.card{{background: var(--card); border:1px solid var(--border); border-radius:16px; padding:16px; margin-bottom:16px; box-shadow: 0 1px 3px rgba(0,0,0,0.06), 0 4px 12px rgba(0,0,0,0.04)}}
+.card h2{{margin:0 0 10px 0; font-size:12px; letter-spacing:0.8px; text-transform:uppercase; color:var(--muted); font-family: ui-monospace, monospace}}
+.grid{{display:grid; gap:10px; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr))}}
+.kv{{background:#ffffff; border:1px solid var(--border); border-radius:12px; padding:12px; position:relative}} .kv .k{{color:var(--muted); font-size:10px; text-transform:uppercase; letter-spacing:0.7px; font-family: ui-monospace, monospace}} .kv .v{{font-weight:700; margin-top:4px; font-size:16px}} .kv .v small{{font-weight:400; color:var(--muted); font-size:11px; font-family: ui-monospace, monospace}}
+.stats{{display:grid; grid-template-columns: repeat(4, 1fr); gap:10px; margin-bottom:14px}} @media(max-width:800px){{.stats{{grid-template-columns: repeat(2,1fr)}}}}
+.stat{{background: #ffffff; border:1px solid var(--border); border-radius:14px; padding:14px; text-align:center}} .stat .num{{font-size:26px; font-weight:800; line-height:1; font-family: ui-monospace, monospace}} .stat .lbl{{color:var(--muted); font-size:11px; margin-top:4px; text-transform:uppercase; letter-spacing:0.6px; font-family: ui-monospace, monospace}}
+.charts{{display:grid; grid-template-columns: 1.1fr 1fr 1fr; gap:10px; margin-bottom:16px}} @media(max-width:900px){{.charts{{grid-template-columns:1fr}}}}
+.chartBox{{background: #ffffff; border:1px solid var(--border); border-radius:14px; padding:14px}} .chartBox h3{{margin:0 0 8px 0; font-size:11px; color:var(--muted); text-transform:uppercase; letter-spacing:0.6px; font-family: ui-monospace, monospace}}
 .canv{{width:100%; height:180px; display:block}}
-table{{width:100%; border-collapse:collapse; font-size:13px}} th,td{{text-align:left; padding:10px; border-bottom:1px solid var(--border); vertical-align:top}} th{{color:var(--muted); font-weight:600; font-size:11px; text-transform:uppercase; letter-spacing:0.5px; position:sticky; top:0; background: var(--card)}}
-.tag{{display:inline-block; background:#0f172a; border:1px solid var(--border); border-radius:999px; padding:4px 8px; margin:2px; font-size:11px}} .muted{{color:var(--muted)}}
-.controls{{display:flex; gap:8px; flex-wrap:wrap; margin-bottom:12px}} .controls input, .controls select{{flex:1; min-width:160px; padding:10px 12px; border-radius:10px; border:1px solid var(--border); background:#0f172a; color:var(--fg); outline:none}} .controls input:focus{{border-color:var(--accent)}}
-.btn{{padding:10px 14px; border-radius:10px; border:1px solid var(--border); background: linear-gradient(180deg, #1e293b, #0f172a); color:var(--fg); cursor:pointer; font-weight:600}} .btn:hover{{border-color:var(--accent)}}
-.badge{{display:inline-block; padding:3px 8px; border-radius:999px; font-size:11px; font-weight:700; border:1px solid transparent}} .bCrit{{background:rgba(239,68,68,0.15); color:#fca5a5; border-color:rgba(239,68,68,0.3)}} .bAlta{{background:rgba(245,158,11,0.15); color:#fcd34d; border-color:rgba(245,158,11,0.3)}} .bMedia{{background:rgba(234,179,8,0.15); color:#fde68a; border-color:rgba(234,179,8,0.3)}} .bBaja{{background:rgba(34,197,94,0.15); color:#86efac; border-color:rgba(34,197,94,0.3)}}
-.bar{{height:10px; border-radius:999px; background: linear-gradient(90deg, #38bdf8, #818cf8); display:block}} .barWrap{{background:#0f172a; border-radius:999px; overflow:hidden; height:10px}}
-footer{{color:var(--muted); font-size:12px; text-align:center; padding:18px}}
-.pill{{display:inline-flex; align-items:center; gap:6px; padding:6px 10px; border-radius:999px; background:rgba(56,189,248,0.12); border:1px solid rgba(56,189,248,0.25); font-size:12px}}
+table{{width:100%; border-collapse:collapse; font-size:12px}} th,td{{text-align:left; padding:9px; border-bottom:1px solid var(--border); vertical-align:top; font-family: ui-monospace, monospace; font-size:11px}} th{{color:var(--muted); font-weight:600; font-size:10px; text-transform:uppercase; letter-spacing:0.6px; position:sticky; top:0; background: #fffbeb}} 
+.tag{{display:inline-block; background:#fffbeb; border:1px solid var(--border); border-radius:999px; padding:3px 7px; margin:2px; font-size:11px; font-family: ui-monospace, monospace}} .muted{{color:var(--muted)}}
+.controls{{display:flex; gap:8px; flex-wrap:wrap; margin-bottom:12px}} .controls input, .controls select{{flex:1; min-width:160px; padding:9px 11px; border-radius:8px; border:1px solid var(--border); background:#ffffff; color:var(--fg); outline:none; font-family: ui-monospace, monospace; font-size:12px}} .controls input:focus{{border-color:var(--accent)}}
+.btn{{padding:9px 13px; border-radius:8px; border:1px solid var(--border); background: #1c1917; color:#fdfbf7; cursor:pointer; font-weight:600; font-family: ui-monospace, monospace; font-size:12px}} .btn:hover{{background:#292524}}
+.badge{{display:inline-block; padding:2px 7px; border-radius:999px; font-size:11px; font-weight:700; border:1px solid transparent; font-family: ui-monospace, monospace}} .bCrit{{background:#fef2f2; color:#991b1b; border-color:#fecaca}} .bAlta{{background:#fffbeb; color:#92400e; border-color:#fde68a}} .bMedia{{background:#fefce8; color:#854d0e; border-color:#fde047}} .bBaja{{background:#f0fdf4; color:#166534; border-color:#bbf7d0}}
+.bar{{height:8px; border-radius:999px; background: #1c1917; display:block}} .barWrap{{background:#f5f5f4; border-radius:999px; overflow:hidden; height:8px}}
+footer{{color:var(--muted); font-size:11px; text-align:center; padding:16px; font-family: ui-monospace, monospace}}
+.pill{{display:inline-flex; align-items:center; gap:5px; padding:5px 9px; border-radius:999px; background:#fffbeb; border:1px solid var(--border); font-size:11px; font-family: ui-monospace, monospace}}
 </style>
 </head>
 <body>
 <header>
-  <h1>AuDeep — Auditoría Mamona</h1>
-  <div class="sub">Generado: {} · Subred: {} · Hosts: {} · Vulns: {} · Duración: {:.1}s · <span class="pill">● Live</span> <span id="liveStatus" class="muted">offline</span></div>
+  <h1><span style="color:var(--accent)">›_</span> AuDeep <span style="color:var(--muted); font-weight:400">::</span> AUDIT <span style="font-size:13px; background:#1c1917; color:#fdfbf7; padding:2px 6px; border-radius:6px; vertical-align:middle">v0.1.0</span></h1>
+  <div class="sub">Generado: {} · Subred: {} · Hosts: {} · Vulns: {} · Duración: {:.1}s · <span class="pill">● Live</span> <span id="liveStatus" class="muted">offline</span> · <span class="muted">`audeep --serve 0.0.0.0:8766`</span></div>
 </header>
 <div class="wrap">
   <div class="stats">
@@ -226,8 +225,9 @@ footer{{color:var(--muted); font-size:12px; text-align:center; padding:18px}}
     <div class="stat"><div class="num" style="color:#22c55e">{}</div><div class="lbl">Puertos distintos</div></div>
   </div>
 
-  <div class="card">
-    <h2>Hardware — {}</h2>
+  <div class="card" style="border-left:3px solid #1c1917">
+    <h2>// Hardware — {}</h2>
+    <p class="muted" style="margin:-4px 0 10px 0; font-size:11px; font-family: ui-monospace, monospace">Inventario local `sysinfo 0.30` + `Components` · CPU/Mem/Discos/IFaces/Sensores · Offline, sin agentes</p>
     <div class="grid">
       <div class="kv"><div class="k">Sistema</div><div class="v">{} {}<br><small>{}</small></div></div>
       <div class="kv"><div class="k">CPU</div><div class="v">{}<br><small>{} núcleos físicos / {} lógicos @ {} MHz · {}</small></div></div>
@@ -238,25 +238,28 @@ footer{{color:var(--muted); font-size:12px; text-align:center; padding:18px}}
 
   <div class="charts">
     <div class="chartBox"><h3>Vendors Top</h3><canvas id="cVendor" class="canv" width="400" height="200"></canvas><div id="legendVendor" class="muted" style="font-size:11px; margin-top:6px"></div></div>
-    <div class="chartBox"><h3>Severidad Vulns</h3><canvas id="cSev" class="canv" width="300" height="200"></canvas><div style="display:flex; gap:6px; margin-top:8px; flex-wrap:wrap"><span class="badge bCrit">Crítica {}</span><span class="badge bAlta">Alta {}</span><span class="badge bMedia">Media {}</span><span class="badge bBaja">Baja {}</span></div></div>
+    <div class="chartBox"><h3>Severidad Vulns</h3><canvas id="cSev" class="canv" width="220" height="220"></canvas><div style="display:flex; gap:6px; margin-top:8px; flex-wrap:wrap"><span class="badge bCrit">Crítica {}</span><span class="badge bAlta">Alta {}</span><span class="badge bMedia">Media {}</span><span class="badge bBaja">Baja {}</span></div></div>
     <div class="chartBox"><h3>Puertos Top</h3><canvas id="cPorts" class="canv" width="400" height="200"></canvas></div>
   </div>
 
   <div class="card">
-    <h2>Almacenamiento</h2>
+    <h2>// Almacenamiento</h2>
+    <p class="muted" style="margin:-4px 0 10px 0; font-size:11px; font-family: ui-monospace, monospace">`Disks::new_with_refreshed_list()` · GB = 1024³ · Tipo fijo/extraíble</p>
     <table><thead><tr><th>Nombre</th><th>Punto</th><th>FS</th><th>Espacio</th><th>Tipo</th></tr></thead><tbody>{}</tbody></table>
   </div>
 
   <div class="card">
-    <h2>Interfaces locales · Sensores</h2>
+    <h2>// Interfaces locales · Sensores</h2>
+    <p class="muted" style="margin:-4px 0 10px 0; font-size:11px; font-family: ui-monospace, monospace">`Networks` MAC + `Components` temp · `load_avg` 1/5/15m · Normal vacío en Windows/VM</p>
     <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px">
       <div><table><thead><tr><th>Interfaz</th><th>MAC</th></tr></thead><tbody>{}</tbody></table></div>
       <div><table><thead><tr><th>Etiqueta</th><th>Temp</th><th>Máx</th><th>Crítica</th></tr></thead><tbody>{}</tbody></table></div>
     </div>
   </div>
 
-  <div class="card">
-    <h2>Hosts — {} vivos · {} hallazgos <span class="muted" style="font-weight:400">· OUI {} · cve.db {}</span></h2>
+  <div class="card" style="border-left:3px solid #dc2626">
+    <h2>// Red — {} vivos · {} hallazgos <span class="muted" style="font-weight:400">· OUI {} · cve.db {}</span></h2>
+    <p class="muted" style="margin:-4px 0 10px 0; font-size:11px; font-family: ui-monospace, monospace">Descubrimiento `/24` UDP trick + TCP 80/445/22/53 + `ping` + `arp -a` + OUI 40k + reverse DNS + `mdns-sd` + `SSDP` M-SEARCH · `COMMON_PORTS 21` + banner 800ms + `cve.db` SQLite offline</p>
     <div class="controls">
       <input id="q" placeholder="🔍 Buscar IP, hostname, MAC, vendor, mDNS, SSDP, puerto...">
       <select id="fSev"><option value="">Todas severidades</option><option value="critica">Crítica</option><option value="alta">Alta</option><option value="media">Media</option><option value="baja">Baja</option><option value="sano">Sanos (0 vulns)</option></select>
@@ -320,22 +323,22 @@ const PORT_VALS="__PORT_VALS__".split(",").filter(Boolean).map(Number);
 const SEV=[__SEV_CRIT__,__SEV_ALTA__,__SEV_MEDIA__,__SEV_BAJA__];
 function drawBar(id, labels, vals, color){
   const c=document.getElementById(id); if(!c) return; const ctx=c.getContext('2d'); const W=c.width, H=c.height, pad=28;
-  ctx.clearRect(0,0,W,H); if(!vals.length){ ctx.fillStyle="#9aa4b2"; ctx.font="12px sans-serif"; ctx.fillText("sin datos", 10, H/2); return;}
+  ctx.clearRect(0,0,W,H); if(!vals.length){ ctx.fillStyle="#78716c"; ctx.font="12px ui-monospace, monospace"; ctx.fillText("sin datos", 10, H/2); return;}
   const max=Math.max(...vals,1); const bw=(W-pad*2)/vals.length*0.62; const gap=(W-pad*2)/vals.length*0.38;
   labels.forEach((lb,i)=>{ const x=pad + i*(bw+gap) + gap/2; const h=(vals[i]/max)*(H-pad*2-14); const y=H-pad - h;
-    const grad=ctx.createLinearGradient(x,y,x,y+h); grad.addColorStop(0, color); grad.addColorStop(1, "#1e293b");
-    ctx.fillStyle=grad; ctx.beginPath(); ctx.roundRect(x,y,bw,h,6); ctx.fill();
-    ctx.fillStyle="#e6edf3"; ctx.font="10px sans-serif"; ctx.textAlign="center"; ctx.fillText(String(vals[i]), x+bw/2, y-4);
-    ctx.fillStyle="#9aa4b2"; ctx.font="9px sans-serif"; let s=lb.length>14?lb.slice(0,13)+"…":lb; ctx.fillText(s, x+bw/2, H-6);
+    const grad=ctx.createLinearGradient(x,y,x,y+h); grad.addColorStop(0, color); grad.addColorStop(1, "#fdfbf7");
+    ctx.fillStyle=grad; ctx.beginPath(); if(ctx.roundRect) ctx.roundRect(x,y,bw,h,6); else ctx.rect(x,y,bw,h); ctx.fill();
+    ctx.fillStyle="#1c1917"; ctx.font="10px ui-monospace, monospace"; ctx.textAlign="center"; ctx.fillText(String(vals[i]), x+bw/2, y-4);
+    ctx.fillStyle="#57534e"; ctx.font="9px ui-monospace, monospace"; let s=lb.length>14?lb.slice(0,13)+"…":lb; ctx.fillText(s, x+bw/2, H-6);
   });
 }
 function drawPie(id, vals, colors){
   const c=document.getElementById(id); if(!c) return; const ctx=c.getContext('2d'); const W=c.width, H=c.height; const cx=W/2, cy=H/2, r=Math.min(W,H)/2 -14;
-  ctx.clearRect(0,0,W,H); const total=vals.reduce((a,b)=>a+b,0); if(total===0){ ctx.fillStyle="#9aa4b2"; ctx.font="12px sans-serif"; ctx.textAlign="center"; ctx.fillText("0 hallazgos", cx, cy); return;}
+  ctx.clearRect(0,0,W,H); const total=vals.reduce((a,b)=>a+b,0); if(total===0){ ctx.fillStyle="#78716c"; ctx.font="12px ui-monospace, monospace"; ctx.textAlign="center"; ctx.fillText("0 hallazgos", cx, cy); return;}
   let ang=-Math.PI/2; vals.forEach((v,i)=>{ const slice= v/total* Math.PI*2; ctx.beginPath(); ctx.moveTo(cx,cy); ctx.arc(cx,cy,r,ang, ang+slice); ctx.closePath(); ctx.fillStyle=colors[i]; ctx.fill(); ang+=slice; });
-  ctx.beginPath(); ctx.arc(cx,cy,r*0.58,0,Math.PI*2); ctx.fillStyle="#0f172a"; ctx.fill();
-  ctx.fillStyle="#e6edf3"; ctx.font="bold 16px sans-serif"; ctx.textAlign="center"; ctx.fillText(String(total), cx, cy+5);
-  ctx.fillStyle="#9aa4b2"; ctx.font="9px sans-serif"; ctx.fillText("vulns", cx, cy+18);
+  ctx.beginPath(); ctx.arc(cx,cy,r*0.58,0,Math.PI*2); ctx.fillStyle="#ffffff"; ctx.fill(); ctx.strokeStyle="#e7e5e4"; ctx.lineWidth=1; ctx.stroke();
+  ctx.fillStyle="#1c1917"; ctx.font="bold 16px ui-monospace, monospace"; ctx.textAlign="center"; ctx.fillText(String(total), cx, cy+5);
+  ctx.fillStyle="#57534e"; ctx.font="9px ui-monospace, monospace"; ctx.fillText("vulns", cx, cy+18);
 }
 drawBar("cVendor", VENDOR_LABELS, VENDOR_VALS, "#38bdf8");
 drawBar("cPorts", PORT_LABELS, PORT_VALS, "#818cf8");
