@@ -24,9 +24,9 @@ struct Args {
     #[arg(long, value_name="PATH")]
     html: Option<PathBuf>,
 
-    /// Modo servidor: expone / (HTML), /json, /health en ADDR (default 0.0.0.0:8080)
+    /// Modo servidor: expone / (HTML), /json, /health en ADDR (default 0.0.0.0:8766, evita Koupper 8080)
     /// Uso: --serve, --serve 192.168.4.1:80, --serve=192.168.4.1:80
-    #[arg(long, value_name="ADDR", num_args=0..=1, default_missing_value="0.0.0.0:8080")]
+    #[arg(long, value_name="ADDR", num_args=0..=1, default_missing_value="0.0.0.0:8766")]
     serve: Option<String>,
 }
 
