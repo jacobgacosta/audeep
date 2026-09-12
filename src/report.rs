@@ -2,6 +2,7 @@ use crate::hardware::HardwareReport;
 use crate::network::HostInfo;
 use chrono::{DateTime, Utc};
 use serde::Serialize;
+use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 
@@ -84,8 +85,14 @@ impl AuditReport {
             let latency = h.latency_ms.map(|v| format!("{} ms", v)).unwrap_or_else(|| "—".to_string());
             let mdns = if h.mdns_names.is_empty() { "—".to_string() } else { h.mdns_names.iter().map(|n| html_escape(n)).collect::<Vec<_>>().join("<br>") };
             let ssdp = h.ssdp_location.clone().map(|s| html_escape(&s)).unwrap_or_else(|| "—".to_string());
+            // data attributes for JS filtering
+            let sev = h.vulnerabilities.iter().map(|v| v.severity.clone()).collect::<Vec<_>>().join(",");
             format!(
-                "<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>",
+                "<tr data-ip='{}' data-hostname='{}' data-vendor='{}' data-sev='{}'><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>",
+                html_escape(&h.ip.to_lowercase()),
+                html_escape(&h.hostname.clone().unwrap_or_default().to_lowercase()),
+                html_escape(&vendor.to_lowercase()),
+                sev,
                 html_escape(&h.ip),
                 html_escape(&h.hostname.clone().unwrap_or_else(|| "—".to_string())),
                 html_escape(&mac),
@@ -143,107 +150,246 @@ impl AuditReport {
             });
         let cve_count = crate::vuln::load_db().len();
 
-        format!(r#"<!DOCTYPE html>
+        // Chart data computed in Rust for JS
+        let mut vendor_counts: HashMap<String, usize> = HashMap::new();
+        let mut port_counts: HashMap<String, usize> = HashMap::new();
+        let mut sev_counts: HashMap<String, usize> = HashMap::new();
+        for h in &self.hosts {
+            let v = h.vendor.clone().unwrap_or_else(|| "Desconocido".to_string());
+            *vendor_counts.entry(v).or_insert(0) += 1;
+            for p in &h.open_ports { *port_counts.entry(p.port.to_string()).or_insert(0) += 1; }
+            for vuln in &h.vulnerabilities { *sev_counts.entry(vuln.severity.clone()).or_insert(0) +=1; }
+        }
+        let mut vendor_sorted: Vec<_> = vendor_counts.into_iter().collect();
+        vendor_sorted.sort_by(|a,b| b.1.cmp(&a.1));
+        vendor_sorted.truncate(6);
+        let mut port_sorted: Vec<_> = port_counts.into_iter().collect();
+        port_sorted.sort_by(|a,b| b.1.cmp(&a.1));
+        port_sorted.truncate(8);
+
+        let vendor_labels = vendor_sorted.iter().map(|(k,_)| html_escape(k)).collect::<Vec<_>>().join("|");
+        let vendor_vals = vendor_sorted.iter().map(|(_,v)| v.to_string()).collect::<Vec<_>>().join(",");
+        let port_labels = port_sorted.iter().map(|(k,_)| k.clone()).collect::<Vec<_>>().join(",");
+        let port_vals = port_sorted.iter().map(|(_,v)| v.to_string()).collect::<Vec<_>>().join(",");
+        let sev_crit = sev_counts.get("critica").cloned().unwrap_or(0);
+        let sev_alta = sev_counts.get("alta").cloned().unwrap_or(0);
+        let sev_media = sev_counts.get("media").cloned().unwrap_or(0);
+        let sev_baja = sev_counts.get("baja").cloned().unwrap_or(0);
+        let total_vulns = self.network.total_vulnerabilities;
+
+        let data_json = serde_json::to_string(&self.hosts).unwrap_or_else(|_| "[]".to_string());
+        // Escape for html
+        let data_json_escaped = data_json.replace("</", "<\\/");
+
+        let base = format!(r#"<!DOCTYPE html>
 <html lang="es">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>AuDeep — Reporte de Auditoría</title>
+<title>AuDeep — Reporte Mamón</title>
 <style>
-:root {{ --bg:#0b0f14; --fg:#e6edf3; --muted:#9aa4b2; --card:#111827; --accent:#38bdf8; --border:#1f2937; }}
-*{{box-sizing:border-box}} body{{margin:0;font-family: ui-sans-serif,system-ui,Segoe UI,Roboto,Helvetica,Arial; background:var(--bg); color:var(--fg);}}
-header{{padding:28px 20px; border-bottom:1px solid var(--border); position:sticky; top:0; backdrop-filter: blur(8px); background:rgba(11,15,20,0.8)}}
-h1{{margin:0;font-size:22px; letter-spacing:0.2px}} .sub{{color:var(--muted); font-size:13px; margin-top:6px}}
-.wrap{{max-width:1100px; margin:0 auto; padding:20px}}
-.card{{background:var(--card); border:1px solid var(--border); border-radius:16px; padding:18px; margin-bottom:18px}}
-.card h2{{margin:0 0 12px 0; font-size:16px}}
-.grid{{display:grid; gap:12px; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr))}}
-.kv{{background:#0f172a; border:1px solid var(--border); border-radius:12px; padding:12px}}
-.kv .k{{color:var(--muted); font-size:12px}} .kv .v{{font-weight:600; margin-top:4px}}
-table{{width:100%; border-collapse:collapse; font-size:13px}}
-th,td{{text-align:left; padding:10px; border-bottom:1px solid var(--border); vertical-align:top}}
-th{{color:var(--muted); font-weight:600; font-size:12px; text-transform:uppercase; letter-spacing:0.5px}}
-.tag{{display:inline-block; background:#0f172a; border:1px solid var(--border); border-radius:999px; padding:4px 8px; margin:2px; font-size:12px}}
-.muted{{color:var(--muted)}}
+:root {{ --bg:#060a14; --bg2:#0b1220; --fg:#e6edf3; --muted:#9aa4b2; --card:#0f172a; --card2:#111c36; --accent:#38bdf8; --accent2:#818cf8; --border:#1e293b; --crit:#ef4444; --alta:#f59e0b; --media:#eab308; --baja:#22c55e; }}
+*{{box-sizing:border-box}} body{{margin:0;font-family: ui-sans-serif,system-ui,Segoe UI,Roboto,Helvetica,Arial; background: radial-gradient(1200px 600px at 20% -10%, #1e293b 0%, transparent 60%), radial-gradient(1000px 500px at 100% 0%, #1e1b4b 0%, transparent 50%), linear-gradient(180deg, var(--bg), var(--bg2)); color:var(--fg); min-height:100vh;}}
+header{{padding:28px 20px 18px; border-bottom:1px solid var(--border); position:sticky; top:0; z-index:10; backdrop-filter: blur(12px); background:rgba(6,10,20,0.85)}}
+h1{{margin:0;font-size:24px; letter-spacing:0.3px; background: linear-gradient(90deg, #38bdf8, #818cf8, #c084fc); -webkit-background-clip:text; -webkit-text-fill-color:transparent; font-weight:800}} .sub{{color:var(--muted); font-size:13px; margin-top:6px}}
+.wrap{{max-width:1200px; margin:0 auto; padding:20px}}
+.card{{background: linear-gradient(180deg, var(--card), var(--card2)); border:1px solid var(--border); border-radius:18px; padding:18px; margin-bottom:18px; box-shadow: 0 8px 30px rgba(0,0,0,0.35)}}
+.card h2{{margin:0 0 12px 0; font-size:15px; letter-spacing:0.4px; text-transform:uppercase; color:var(--muted)}}
+.grid{{display:grid; gap:12px; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr))}}
+.kv{{background:rgba(15,23,42,0.9); border:1px solid var(--border); border-radius:14px; padding:14px; position:relative; overflow:hidden}} .kv::after{{content:""; position:absolute; inset:0; background: radial-gradient(400px 100px at 100% 0%, rgba(56,189,248,0.12), transparent 60%); pointer-events:none}}
+.kv .k{{color:var(--muted); font-size:11px; text-transform:uppercase; letter-spacing:0.6px}} .kv .v{{font-weight:700; margin-top:6px; font-size:18px}} .kv .v small{{font-weight:500; color:var(--muted); font-size:12px}}
+.stats{{display:grid; grid-template-columns: repeat(4, 1fr); gap:12px; margin-bottom:12px}} @media(max-width:800px){{.stats{{grid-template-columns: repeat(2,1fr)}}}}
+.stat{{background: linear-gradient(135deg, #0f172a, #1e293b); border:1px solid var(--border); border-radius:16px; padding:16px; text-align:center}} .stat .num{{font-size:28px; font-weight:800; line-height:1}} .stat .lbl{{color:var(--muted); font-size:12px; margin-top:4px; text-transform:uppercase; letter-spacing:0.5px}}
+.charts{{display:grid; grid-template-columns: 1.1fr 1fr 1fr; gap:12px; margin-bottom:18px}} @media(max-width:900px){{.charts{{grid-template-columns:1fr}}}}
+.chartBox{{background: var(--card); border:1px solid var(--border); border-radius:14px; padding:12px}} .chartBox h3{{margin:0 0 8px 0; font-size:12px; color:var(--muted); text-transform:uppercase; letter-spacing:0.5px}}
+.canv{{width:100%; height:180px; display:block}}
+table{{width:100%; border-collapse:collapse; font-size:13px}} th,td{{text-align:left; padding:10px; border-bottom:1px solid var(--border); vertical-align:top}} th{{color:var(--muted); font-weight:600; font-size:11px; text-transform:uppercase; letter-spacing:0.5px; position:sticky; top:0; background: var(--card)}}
+.tag{{display:inline-block; background:#0f172a; border:1px solid var(--border); border-radius:999px; padding:4px 8px; margin:2px; font-size:11px}} .muted{{color:var(--muted)}}
+.controls{{display:flex; gap:8px; flex-wrap:wrap; margin-bottom:12px}} .controls input, .controls select{{flex:1; min-width:160px; padding:10px 12px; border-radius:10px; border:1px solid var(--border); background:#0f172a; color:var(--fg); outline:none}} .controls input:focus{{border-color:var(--accent)}}
+.btn{{padding:10px 14px; border-radius:10px; border:1px solid var(--border); background: linear-gradient(180deg, #1e293b, #0f172a); color:var(--fg); cursor:pointer; font-weight:600}} .btn:hover{{border-color:var(--accent)}}
+.badge{{display:inline-block; padding:3px 8px; border-radius:999px; font-size:11px; font-weight:700; border:1px solid transparent}} .bCrit{{background:rgba(239,68,68,0.15); color:#fca5a5; border-color:rgba(239,68,68,0.3)}} .bAlta{{background:rgba(245,158,11,0.15); color:#fcd34d; border-color:rgba(245,158,11,0.3)}} .bMedia{{background:rgba(234,179,8,0.15); color:#fde68a; border-color:rgba(234,179,8,0.3)}} .bBaja{{background:rgba(34,197,94,0.15); color:#86efac; border-color:rgba(34,197,94,0.3)}}
+.bar{{height:10px; border-radius:999px; background: linear-gradient(90deg, #38bdf8, #818cf8); display:block}} .barWrap{{background:#0f172a; border-radius:999px; overflow:hidden; height:10px}}
 footer{{color:var(--muted); font-size:12px; text-align:center; padding:18px}}
+.pill{{display:inline-flex; align-items:center; gap:6px; padding:6px 10px; border-radius:999px; background:rgba(56,189,248,0.12); border:1px solid rgba(56,189,248,0.25); font-size:12px}}
 </style>
 </head>
 <body>
 <header>
-  <h1>AuDeep — Reporte de Auditoría de Hardware y Red</h1>
-  <div class="sub">Generado: {} · Subred local: {} · Hosts vivos: {} · Duración escaneo: {:.1}s</div>
+  <h1>AuDeep — Auditoría Mamona</h1>
+  <div class="sub">Generado: {} · Subred: {} · Hosts: {} · Vulns: {} · Duración: {:.1}s · <span class="pill">● Live</span> <span id="liveStatus" class="muted">offline</span></div>
 </header>
 <div class="wrap">
+  <div class="stats">
+    <div class="stat"><div class="num" style="color:#38bdf8">{}</div><div class="lbl">Hosts vivos</div></div>
+    <div class="stat"><div class="num" style="color:#ef4444">{}</div><div class="lbl">Hallazgos</div></div>
+    <div class="stat"><div class="num" style="color:#a78bfa">{}</div><div class="lbl">Vendors únicos</div></div>
+    <div class="stat"><div class="num" style="color:#22c55e">{}</div><div class="lbl">Puertos distintos</div></div>
+  </div>
+
   <div class="card">
-    <h2>Hardware local — {}</h2>
+    <h2>Hardware — {}</h2>
     <div class="grid">
-      <div class="kv"><div class="k">Sistema</div><div class="v">{} {}</div></div>
-      <div class="kv"><div class="k">Kernel</div><div class="v">{}</div></div>
-      <div class="kv"><div class="k">CPU</div><div class="v">{} ({})<br><span class="muted">{} núcleos físicos / {} lógicos @ {} MHz</span></div></div>
-      <div class="kv"><div class="k">Memoria</div><div class="v">{:.1} / {:.1} GB usados</div></div>
-      <div class="kv"><div class="k">Uptime</div><div class="v">{} s</div></div>
-      <div class="kv"><div class="k">Carga (1/5/15m)</div><div class="v">{:.2} / {:.2} / {:.2}</div></div>
-      <div class="kv"><div class="k">Discos</div><div class="v">{} unidades</div></div>
-      <div class="kv"><div class="k">Sensores</div><div class="v">{} detectados</div></div>
+      <div class="kv"><div class="k">Sistema</div><div class="v">{} {}<br><small>{}</small></div></div>
+      <div class="kv"><div class="k">CPU</div><div class="v">{}<br><small>{} núcleos físicos / {} lógicos @ {} MHz · {}</small></div></div>
+      <div class="kv"><div class="k">Memoria</div><div class="v">{:.1} / {:.1} GB<br><small>{:.1} GB disponible</small></div></div>
+      <div class="kv"><div class="k">Uptime / Carga</div><div class="v">{} s<br><small>{:.2} {:.2} {:.2} · {} sensores</small></div></div>
     </div>
+  </div>
+
+  <div class="charts">
+    <div class="chartBox"><h3>Vendors Top</h3><canvas id="cVendor" class="canv" width="400" height="200"></canvas><div id="legendVendor" class="muted" style="font-size:11px; margin-top:6px"></div></div>
+    <div class="chartBox"><h3>Severidad Vulns</h3><canvas id="cSev" class="canv" width="300" height="200"></canvas><div style="display:flex; gap:6px; margin-top:8px; flex-wrap:wrap"><span class="badge bCrit">Crítica {}</span><span class="badge bAlta">Alta {}</span><span class="badge bMedia">Media {}</span><span class="badge bBaja">Baja {}</span></div></div>
+    <div class="chartBox"><h3>Puertos Top</h3><canvas id="cPorts" class="canv" width="400" height="200"></canvas></div>
   </div>
 
   <div class="card">
     <h2>Almacenamiento</h2>
-    <table><thead><tr><th>Nombre</th><th>Punto de montaje</th><th>FS</th><th>Espacio</th><th>Tipo</th></tr></thead><tbody>{}</tbody></table>
+    <table><thead><tr><th>Nombre</th><th>Punto</th><th>FS</th><th>Espacio</th><th>Tipo</th></tr></thead><tbody>{}</tbody></table>
   </div>
 
   <div class="card">
-    <h2>Interfaces de red (local)</h2>
-    <table><thead><tr><th>Interfaz</th><th>MAC</th></tr></thead><tbody>{}</tbody></table>
+    <h2>Interfaces locales · Sensores</h2>
+    <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px">
+      <div><table><thead><tr><th>Interfaz</th><th>MAC</th></tr></thead><tbody>{}</tbody></table></div>
+      <div><table><thead><tr><th>Etiqueta</th><th>Temp</th><th>Máx</th><th>Crítica</th></tr></thead><tbody>{}</tbody></table></div>
+    </div>
   </div>
 
   <div class="card">
-    <h2>Sensores de temperatura</h2>
-    <table><thead><tr><th>Etiqueta</th><th>Temp</th><th>Máx</th><th>Crítica</th></tr></thead><tbody>{}</tbody></table>
-  </div>
-
-  <div class="card">
-    <h2>Hosts en la red ({} vivos) — {} hallazgos</h2>
-    <table><thead><tr><th>IP</th><th>Hostname</th><th>MAC</th><th>Fabricante (OUI)</th><th>Latencia</th><th>Puertos abiertos</th><th>Vulnerabilidades</th><th>mDNS</th><th>SSDP</th></tr></thead><tbody>{}</tbody></table>
-    <p class="muted" style="margin-top:10px">Nota: MAC y fabricante requieren lectura de tabla ARP (sin privilegios). OUI DB: <code>assets/oui_full.json</code> ({} entradas, + <code>cve.db</code> SQLite {} vulns). Puertos escaneados: {} · Vuln DB: <code>assets/cve.db</code> (fallback <code>vuln_db.json</code>) · mDNS/SSDP 1.2s</p>
+    <h2>Hosts — {} vivos · {} hallazgos <span class="muted" style="font-weight:400">· OUI {} · cve.db {}</span></h2>
+    <div class="controls">
+      <input id="q" placeholder="🔍 Buscar IP, hostname, MAC, vendor, mDNS, SSDP, puerto...">
+      <select id="fSev"><option value="">Todas severidades</option><option value="critica">Crítica</option><option value="alta">Alta</option><option value="media">Media</option><option value="baja">Baja</option><option value="sano">Sanos (0 vulns)</option></select>
+      <select id="fVendor"><option value="">Todos vendors</option></select>
+      <button class="btn" onclick="exportJson()">⬇ JSON</button>
+      <button class="btn" onclick="window.print()">🖨 Print</button>
+    </div>
+    <div style="overflow:auto; max-height:520px; border:1px solid var(--border); border-radius:12px">
+    <table id="tbl"><thead><tr><th>IP</th><th>Hostname</th><th>MAC</th><th>Vendor</th><th>Lat</th><th>Puertos</th><th>Vulns</th><th>mDNS</th><th>SSDP</th></tr></thead><tbody>{}</tbody></table>
+    </div>
+    <p class="muted" style="margin-top:10px; font-size:11px">Puertos escaneados: {} · mDNS/SSDP 1.2s · Doble click fila para copiar IP · <span id="filteredCount"></span></p>
   </div>
 </div>
-<footer>AuDeep v0.1.0 · Rust · Reporte offline listo para USB/Raspberry Pi</footer>
-</body>
-</html>
+<footer>AuDeep v0.1.0 · Rust · Offline-first · <span id="footTime"></span> · Hecho con 🦀</footer>
 "#,
         self.generated_at.format("%Y-%m-%d %H:%M:%S UTC"),
         html_escape(&subnet),
         self.network.total_hosts_alive,
+        self.network.total_vulnerabilities,
         self.network.scan_duration_secs,
+        self.network.total_hosts_alive,
+        self.network.total_vulnerabilities,
+        vendor_sorted.len(),
+        port_sorted.len(),
         html_escape(&self.hardware.hostname),
         html_escape(&self.hardware.os_name),
         html_escape(&self.hardware.os_version),
         html_escape(&self.hardware.kernel_version),
         html_escape(&self.hardware.cpu.brand),
-        html_escape(&self.hardware.cpu.vendor),
         self.hardware.cpu.cores_physical.unwrap_or(0),
         self.hardware.cpu.cores_logical,
         self.hardware.cpu.frequency_mhz,
+        html_escape(&self.hardware.cpu.vendor),
         self.hardware.memory.used_gb,
         self.hardware.memory.total_gb,
+        self.hardware.memory.available_gb,
         self.hardware.uptime_secs,
         self.hardware.load_avg_one,
         self.hardware.load_avg_five,
         self.hardware.load_avg_fifteen,
-        self.hardware.disks.len(),
         self.hardware.sensors.len(),
+        sev_crit, sev_alta, sev_media, sev_baja,
         disks_rows,
         net_ifaces,
         sensors_rows,
         self.hosts.len(),
         self.network.total_vulnerabilities,
-        hosts_rows,
         oui_count,
         cve_count,
+        hosts_rows,
         crate::scanner::COMMON_PORTS.iter().map(|p| p.to_string()).collect::<Vec<_>>().join(", ")
-        )
+        );
+
+        // JS para Charts + Filtros + Live
+        let js_template = r##"<script>
+const HOSTS=__DATA__;
+const VENDOR_LABELS="__VENDOR_LABELS__".split("|").filter(Boolean);
+const VENDOR_VALS="__VENDOR_VALS__".split(",").filter(Boolean).map(Number);
+const PORT_LABELS="__PORT_LABELS__".split(",").filter(Boolean);
+const PORT_VALS="__PORT_VALS__".split(",").filter(Boolean).map(Number);
+const SEV=[__SEV_CRIT__,__SEV_ALTA__,__SEV_MEDIA__,__SEV_BAJA__];
+function drawBar(id, labels, vals, color){
+  const c=document.getElementById(id); if(!c) return; const ctx=c.getContext('2d'); const W=c.width, H=c.height, pad=28;
+  ctx.clearRect(0,0,W,H); if(!vals.length){ ctx.fillStyle="#9aa4b2"; ctx.font="12px sans-serif"; ctx.fillText("sin datos", 10, H/2); return;}
+  const max=Math.max(...vals,1); const bw=(W-pad*2)/vals.length*0.62; const gap=(W-pad*2)/vals.length*0.38;
+  labels.forEach((lb,i)=>{ const x=pad + i*(bw+gap) + gap/2; const h=(vals[i]/max)*(H-pad*2-14); const y=H-pad - h;
+    const grad=ctx.createLinearGradient(x,y,x,y+h); grad.addColorStop(0, color); grad.addColorStop(1, "#1e293b");
+    ctx.fillStyle=grad; ctx.beginPath(); ctx.roundRect(x,y,bw,h,6); ctx.fill();
+    ctx.fillStyle="#e6edf3"; ctx.font="10px sans-serif"; ctx.textAlign="center"; ctx.fillText(String(vals[i]), x+bw/2, y-4);
+    ctx.fillStyle="#9aa4b2"; ctx.font="9px sans-serif"; let s=lb.length>14?lb.slice(0,13)+"…":lb; ctx.fillText(s, x+bw/2, H-6);
+  });
+}
+function drawPie(id, vals, colors){
+  const c=document.getElementById(id); if(!c) return; const ctx=c.getContext('2d'); const W=c.width, H=c.height; const cx=W/2, cy=H/2, r=Math.min(W,H)/2 -14;
+  ctx.clearRect(0,0,W,H); const total=vals.reduce((a,b)=>a+b,0); if(total===0){ ctx.fillStyle="#9aa4b2"; ctx.font="12px sans-serif"; ctx.textAlign="center"; ctx.fillText("0 hallazgos", cx, cy); return;}
+  let ang=-Math.PI/2; vals.forEach((v,i)=>{ const slice= v/total* Math.PI*2; ctx.beginPath(); ctx.moveTo(cx,cy); ctx.arc(cx,cy,r,ang, ang+slice); ctx.closePath(); ctx.fillStyle=colors[i]; ctx.fill(); ang+=slice; });
+  ctx.beginPath(); ctx.arc(cx,cy,r*0.58,0,Math.PI*2); ctx.fillStyle="#0f172a"; ctx.fill();
+  ctx.fillStyle="#e6edf3"; ctx.font="bold 16px sans-serif"; ctx.textAlign="center"; ctx.fillText(String(total), cx, cy+5);
+  ctx.fillStyle="#9aa4b2"; ctx.font="9px sans-serif"; ctx.fillText("vulns", cx, cy+18);
+}
+drawBar("cVendor", VENDOR_LABELS, VENDOR_VALS, "#38bdf8");
+drawBar("cPorts", PORT_LABELS, PORT_VALS, "#818cf8");
+drawPie("cSev", SEV, ["#ef4444","#f59e0b","#eab308","#22c55e"]);
+{
+  const sel=document.getElementById("fVendor");
+  VENDOR_LABELS.forEach(v=>{ const o=document.createElement("option"); o.value=v.toLowerCase(); o.textContent=v; sel.appendChild(o); });
+}
+const q=document.getElementById("q"), fSev=document.getElementById("fSev"), fVendor=document.getElementById("fVendor"), tbl=document.getElementById("tbl");
+function apply(){
+  const qq=q.value.toLowerCase(), fs=fSev.value, fv=fVendor.value; let vis=0;
+  tbl.querySelectorAll("tbody tr").forEach(tr=>{
+    const txt=tr.innerText.toLowerCase();
+    const sev=tr.getAttribute("data-sev")||""; const vendor=tr.getAttribute("data-vendor")||"";
+    let ok= (!qq || txt.includes(qq)) && (!fv || vendor.includes(fv));
+    if(fs==="sano") ok= ok && !sev;
+    else if(fs) ok= ok && sev.includes(fs);
+    tr.style.display= ok? "":"none"; if(ok) vis++;
+  });
+  document.getElementById("filteredCount").textContent= vis + " / " + HOSTS.length + " visibles";
+  document.getElementById("footTime").textContent= new Date().toLocaleString();
+}
+q.addEventListener("input", apply); fSev.addEventListener("change", apply); fVendor.addEventListener("change", apply);
+tbl.addEventListener("dblclick", e=>{ const tr=e.target.closest("tr"); if(tr){ const ip=tr.children[0]?.innerText; if(ip){ navigator.clipboard?.writeText(ip); tr.style.background="rgba(56,189,248,0.15)"; setTimeout(()=>tr.style.background="",600);} }});
+function exportJson(){ const blob=new Blob([JSON.stringify({generated:new Date().toISOString(), hosts:HOSTS}, null,2)], {type:"application/json"}); const a=document.createElement("a"); a.href=URL.createObjectURL(blob); a.download="audeep_export.json"; a.click(); }
+// Live poll si está servido via http
+(function live(){
+  const isHttp=location.protocol.startsWith("http");
+  const el=document.getElementById("liveStatus");
+  if(isHttp){ el.textContent="live polling /json cada 5s"; el.style.color="#22c55e";
+    setInterval(async()=>{ try{ const r=await fetch("/json",{cache:"no-store"}); if(r.ok){ const j=await r.json(); el.textContent="live " + new Date().toLocaleTimeString() + " ("+ (j.hosts?.length||0) +" hosts)"; }}catch(e){} },5000);
+  } else { el.textContent="offline file://"; }
+})();
+// Vendor legend
+document.getElementById("legendVendor").textContent= VENDOR_LABELS.map((l,i)=> l + " ("+ (VENDOR_VALS[i]||0) +")").join(" · ");
+apply();
+</script>
+</body>
+</html>
+"##;
+        let js = js_template
+            .replace("__DATA__", &data_json_escaped)
+            .replace("__VENDOR_LABELS__", &vendor_labels)
+            .replace("__VENDOR_VALS__", &vendor_vals)
+            .replace("__PORT_LABELS__", &port_labels)
+            .replace("__PORT_VALS__", &port_vals)
+            .replace("__SEV_CRIT__", &sev_crit.to_string())
+            .replace("__SEV_ALTA__", &sev_alta.to_string())
+            .replace("__SEV_MEDIA__", &sev_media.to_string())
+            .replace("__SEV_BAJA__", &sev_baja.to_string());
+
+        let mut html = base;
+        html.push_str(&js);
+        html
     }
 
     pub fn save_html(&self, path: &Path) -> std::io::Result<()> {
