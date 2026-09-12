@@ -57,6 +57,7 @@ audeep/
 Best practices: `cargo fmt` + `clippy`, `serde` derive, `tokio` full, `sysinfo` 0.30, `clap` derive, `rusqlite bundled` + `mdns-sd`, `xtask` Rust puro (sin Python), `include_str!`/`include_bytes!` offline.
 
 ## Docs
-- `knowledge/dispositivo_auditor.md` diseño inicial
+- `docs/architecture.md` (versionado, migrado de `knowledge/dispositivo_auditor.md`) — arquitectura completa + diagrama + stack
+- In-site: `http://127.0.0.1:5111/` tab **Docs** y `http://127.0.0.1:8766/docs` (serve)
 - `deploy/ap/README.md` modo AP
 - `xtask fetch-nvd --help` NVD API 2.0 90d

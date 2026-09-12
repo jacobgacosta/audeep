@@ -3,6 +3,10 @@ use std::time::Instant;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 
+fn html_escape(s: &str) -> String {
+    s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;")
+}
+
 pub async fn serve(addr: &str) -> std::io::Result<()> {
     let listener = TcpListener::bind(addr).await?;
     println!("AuDeep serve en http://{}  (Ctrl+C para salir)", addr);
@@ -26,9 +30,15 @@ pub async fn serve(addr: &str) -> std::io::Result<()> {
             let line = req.lines().next().unwrap_or("");
             let path = line.split_whitespace().nth(1).unwrap_or("/");
 
-            // Health instant, / y /json con loading no-bloqueante
+            // Health instant, /docs, / y /json con loading no-bloqueante
             let (status, body, ctype) = match path {
                 "/health" => ("200 OK", r#"{"status":"ok"}"#.to_string(), "application/json"),
+                "/docs" | "/docs/" | "/docs.md" => {
+                    let md = include_str!("../docs/architecture.md");
+                    // Simple markdown -> HTML: wrap in <pre> crema hack
+                    let html = format!(r#"<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>AuDeep — Docs</title><style>body{{margin:0;font-family:ui-monospace,monospace;background:#fdfbf7;color:#1c1917;padding:24px;max-width:900px;margin:0 auto}} pre{{white-space:pre-wrap;word-wrap:break-word;background:#fff;border:1px solid #e7e5e4;border-radius:12px;padding:18px;overflow:auto}} a{{color:#0ea5e9}} h1{{font-size:22px}} code{{background:#fffbeb;border:1px solid #e7e5e4;padding:1px 4px;border-radius:4px;font-size:12px}}</style></head><body><a href="/" style="font-family:ui-monospace;font-size:12px">← Volver al dashboard</a><pre>{}</pre></body></html>"#, html_escape(md));
+                    ("200 OK", html, "text/html; charset=utf-8")
+                }
                 _ => {
                     let cached = {
                         let guard = cache.lock().await;
