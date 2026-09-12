@@ -60,20 +60,20 @@ impl AuditReport {
                 }).collect::<Vec<_>>().join(" ")
             };
             let vulns = if h.vulnerabilities.is_empty() {
-                "<span class='muted'>—</span>".to_string()
+                "<span class='muted' style='font-family:ui-monospace,monospace; font-size:11px'>— 0 hallazgos</span>".to_string()
             } else {
                 h.vulnerabilities.iter().map(|v| {
-                    let color = match v.severity.as_str() {
-                        "critica" => "#ef4444",
-                        "alta" => "#f59e0b",
-                        "media" => "#eab308",
-                        _ => "#9aa4b2",
+                    let (border, sevClass) = match v.severity.as_str() {
+                        "critica" => ("#dc2626", "bCrit"),
+                        "alta" => ("#d97706", "bAlta"),
+                        "media" => ("#ca8a04", "bMedia"),
+                        _ => ("#16a34a", "bBaja"),
                     };
                     format!(
-                        "<span class='tag' style='border-color:{}'><b>{}</b> <span style='color:{}'>{}</span> :{}<br><small>{}</small></span>",
-                        color,
+                        "<span style=\"display:inline-block; margin:2px; padding:4px 8px; background:#fff; border:1px solid #e7e5e4; border-left:3px solid {}; border-radius:6px; font-family:ui-monospace,monospace; font-size:11px; line-height:1.3\"><b style=\"letter-spacing:0.3px\">{}</b> <span class=\"badge {}\">{}</span> :{}<br><small style=\"color:#57534e; font-family:ui-sans-serif,system-ui; font-size:11px\">{}</small></span>",
+                        border,
                         html_escape(&v.cve),
-                        color,
+                        sevClass,
                         html_escape(&v.severity),
                         v.port,
                         html_escape(&v.description)
@@ -201,9 +201,9 @@ h1{{margin:0;font-size:22px; letter-spacing:-0.3px; color:#1c1917; font-weight:8
 .stat{{background: #ffffff; border:1px solid var(--border); border-radius:14px; padding:14px; text-align:center}} .stat .num{{font-size:26px; font-weight:800; line-height:1; font-family: ui-monospace, monospace}} .stat .lbl{{color:var(--muted); font-size:11px; margin-top:4px; text-transform:uppercase; letter-spacing:0.6px; font-family: ui-monospace, monospace}}
 .charts{{display:grid; grid-template-columns: 1.1fr 1fr 1fr; gap:10px; margin-bottom:16px}} @media(max-width:900px){{.charts{{grid-template-columns:1fr}}}}
 .chartBox{{background: #ffffff; border:1px solid var(--border); border-radius:14px; padding:14px}} .chartBox h3{{margin:0 0 8px 0; font-size:11px; color:var(--muted); text-transform:uppercase; letter-spacing:0.6px; font-family: ui-monospace, monospace}}
-.canv{{width:100%; height:180px; display:block}}
+.canv{{width:100%; height:auto; display:block}} #cVendor,#cPorts{{aspect-ratio: 2 / 1}} #cSev{{aspect-ratio: 1 / 1; max-width:220px; margin:0 auto; display:block}}
 table{{width:100%; border-collapse:collapse; font-size:12px}} th,td{{text-align:left; padding:9px; border-bottom:1px solid var(--border); vertical-align:top; font-family: ui-monospace, monospace; font-size:11px}} th{{color:var(--muted); font-weight:600; font-size:10px; text-transform:uppercase; letter-spacing:0.6px; position:sticky; top:0; background: #fffbeb}} 
-.tag{{display:inline-block; background:#fffbeb; border:1px solid var(--border); border-radius:999px; padding:3px 7px; margin:2px; font-size:11px; font-family: ui-monospace, monospace}} .muted{{color:var(--muted)}}
+.tag{{display:inline-block; background:#ffffff; border:1px solid var(--border); border-radius:6px; padding:3px 7px; margin:2px; font-size:11px; font-family: ui-monospace, monospace}} .muted{{color:var(--muted)}}
 .controls{{display:flex; gap:8px; flex-wrap:wrap; margin-bottom:12px}} .controls input, .controls select{{flex:1; min-width:160px; padding:9px 11px; border-radius:8px; border:1px solid var(--border); background:#ffffff; color:var(--fg); outline:none; font-family: ui-monospace, monospace; font-size:12px}} .controls input:focus{{border-color:var(--accent)}}
 .btn{{padding:9px 13px; border-radius:8px; border:1px solid var(--border); background: #1c1917; color:#fdfbf7; cursor:pointer; font-weight:600; font-family: ui-monospace, monospace; font-size:12px}} .btn:hover{{background:#292524}}
 .badge{{display:inline-block; padding:2px 7px; border-radius:999px; font-size:11px; font-weight:700; border:1px solid transparent; font-family: ui-monospace, monospace}} .bCrit{{background:#fef2f2; color:#991b1b; border-color:#fecaca}} .bAlta{{background:#fffbeb; color:#92400e; border-color:#fde68a}} .bMedia{{background:#fefce8; color:#854d0e; border-color:#fde047}} .bBaja{{background:#f0fdf4; color:#166534; border-color:#bbf7d0}}
