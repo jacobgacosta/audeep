@@ -5,56 +5,45 @@ mod scanner;
 mod serve;
 mod vuln;
 
+use clap::Parser;
 use std::path::PathBuf;
 use std::time::Instant;
 
+#[derive(Parser, Debug)]
+#[command(name="audeep", version, about="AuDeep — Auditor de Hardware y Red (Rust)", long_about=None)]
+struct Args {
+    /// No escanear red, solo hardware local
+    #[arg(long)]
+    no_scan: bool,
+
+    /// Ruta JSON de salida (ej. --json=out.json)
+    #[arg(long, value_name="PATH")]
+    json: Option<PathBuf>,
+
+    /// Ruta HTML de salida (ej. --html=out.html)
+    #[arg(long, value_name="PATH")]
+    html: Option<PathBuf>,
+
+    /// Modo servidor: expone / (HTML), /json, /health en ADDR (default 0.0.0.0:8080)
+    /// Uso: --serve, --serve 192.168.4.1:80, --serve=192.168.4.1:80
+    #[arg(long, value_name="ADDR", num_args=0..=1, default_missing_value="0.0.0.0:8080")]
+    serve: Option<String>,
+}
+
 #[tokio::main]
 async fn main() {
-    let args: Vec<String> = std::env::args().collect();
+    let args = Args::parse();
 
-    // Modo servidor para AP: --serve 0.0.0.0:80, --serve=192.168.4.1:80, o --serve 192.168.4.1:80
-    let serve_addr = {
-        let mut addr: Option<String> = None;
-        for (i, a) in args.iter().enumerate() {
-            if a == "--serve" {
-                // --serve ADDR como dos args
-                if let Some(next) = args.get(i + 1) {
-                    if !next.starts_with("--") {
-                        addr = Some(next.clone());
-                        break;
-                    }
-                }
-                addr = Some("0.0.0.0:8080".to_string());
-                break;
-            } else if a.starts_with("--serve=") {
-                addr = Some(a.split('=').nth(1).unwrap_or("0.0.0.0:8080").to_string());
-                break;
-            }
-        }
-        addr
-    };
-    if let Some(addr) = serve_addr {
+    if let Some(addr) = args.serve {
         if let Err(e) = serve::serve(&addr).await {
             eprintln!("Error serve: {}", e);
         }
         return;
     }
 
-    let do_scan = !args.contains(&"--no-scan".to_string());
-    let out_json = args.iter().find_map(|a| {
-        if a.starts_with("--json=") {
-            Some(PathBuf::from(a.trim_start_matches("--json=")))
-        } else {
-            None
-        }
-    });
-    let out_html = args.iter().find_map(|a| {
-        if a.starts_with("--html=") {
-            Some(PathBuf::from(a.trim_start_matches("--html=")))
-        } else {
-            None
-        }
-    });
+    let do_scan = !args.no_scan;
+    let out_json = args.json;
+    let out_html = args.html;
 
     println!("AuDeep — auditoría iniciada...");
     let hw = hardware::collect_hardware_info();
@@ -104,15 +93,19 @@ async fn main() {
                             .join(", ")
                     )
                 };
+                let mdns_str = if h.mdns_names.is_empty() { "".to_string() } else { format!(" | mdns: {}", h.mdns_names.join(",")) };
+                let ssdp_str = h.ssdp_location.as_ref().map(|s| format!(" | ssdp: {}", s)).unwrap_or_default();
                 println!(
-                    "  - {} {} | MAC {} | vendor {} | {} ms | puertos: {}{}",
+                    "  - {} {} | MAC {} | vendor {} | {} ms | puertos: {}{}{}{}",
                     h.ip,
                     h.hostname.clone().unwrap_or_default(),
                     h.mac.clone().unwrap_or_else(|| "-".to_string()),
                     h.vendor.clone().unwrap_or_else(|| "-".to_string()),
                     h.latency_ms.map(|v| v.to_string()).unwrap_or_else(|| "-".to_string()),
                     ports,
-                    vuln_str
+                    vuln_str,
+                    mdns_str,
+                    ssdp_str
                 );
             }
             hosts = discovered;

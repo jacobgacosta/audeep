@@ -1,0 +1,5 @@
+[alias]
+xtask = "run -p xtask --"
+# Nota Windows gnu: rusqlite bundled necesita zig. Usa:
+# cargo zigbuild -p xtask --target x86_64-pc-windows-gnu && ./target/x86_64-pc-windows-gnu/debug/xtask.exe build-cve
+# o usa scripts/build_cve_db.py (Python fallback)
