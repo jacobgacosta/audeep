@@ -24,42 +24,58 @@ pub async fn serve(addr: &str) -> std::io::Result<()> {
             let line = req.lines().next().unwrap_or("");
             let path = line.split_whitespace().nth(1).unwrap_or("/");
 
-            // Cache 12s + scan bajo demanda
+            // Health instant, / y /json con loading no-bloqueante
             let (status, body, ctype) = match path {
                 "/health" => ("200 OK", r#"{"status":"ok"}"#.to_string(), "application/json"),
-                "/json" | "/" | "/index.html" | _ => {
-                    // Intentar cache
+                _ => {
                     let cached = {
                         let guard = cache.lock().await;
                         if let Some((instant, j, h)) = &*guard {
-                            if instant.elapsed().as_secs() < 12 {
-                                Some((j.clone(), h.clone()))
-                            } else { None }
+                            if instant.elapsed().as_secs() < 12 { Some((j.clone(), h.clone())) } else { None }
                         } else { None }
                     };
-                    let (json, html) = if let Some((j,h)) = cached {
-                        (j, h)
+                    if let Some((j,h)) = cached {
+                        if path == "/json" { ("200 OK", j, "application/json; charset=utf-8") } else { ("200 OK", h, "text/html; charset=utf-8") }
                     } else {
-                        println!("  [scan] Generando reporte (350ms, 64 tasks + mDNS/SSDP 900ms) para {}...", peer);
-                        let hw = hardware::collect_hardware_info();
-                        let subnet = network::local_subnet_cidr();
-                        let start = Instant::now();
-                        let mut hosts = network::discover_hosts(320, 64).await;
-                        hosts = network::enrich_with_arp(hosts).await;
-                        hosts = network::enrich_with_mdns_ssdp(hosts, 800).await;
-                        let dur = start.elapsed().as_secs_f64();
-                        let audit = report::AuditReport::new(hw, hosts, subnet, dur);
-                        let j = audit.to_json_pretty().unwrap_or_else(|_| "{}".to_string());
-                        let h = audit.to_html();
-                        println!("  [scan] Listo en {:.1}s, {} hosts, {} bytes HTML", dur, audit.hosts.len(), h.len());
-                        let mut guard = cache.lock().await;
-                        *guard = Some((Instant::now(), j.clone(), h.clone()));
-                        (j, h)
-                    };
-                    if path == "/json" {
-                        ("200 OK", json, "application/json; charset=utf-8")
-                    } else {
-                        ("200 OK", html, "text/html; charset=utf-8")
+                        // Si no hay cache, verificar si ya hay un scan en curso
+                        let is_scanning = { cache.lock().await.is_none() && {
+                            // intentar ver si ya lanzamos scan (usamos try_lock para no bloquear)
+                            // Si cache sigue None, lanzamos scan en background y retornamos loading
+                            true
+                        }};
+                        if is_scanning {
+                            // Lanzar scan en background solo una vez
+                            let cache_bg = cache.clone();
+                            // Evitar lanzar múltiples scans concurrentes: check via try
+                            let should_spawn = {
+                                let g = cache_bg.try_lock();
+                                g.is_ok() && g.unwrap().is_none()
+                            };
+                            if should_spawn {
+                                tokio::spawn(async move {
+                                    println!("  [scan] Generando reporte background para {}...", peer);
+                                    let hw = hardware::collect_hardware_info();
+                                    let subnet = network::local_subnet_cidr();
+                                    let start = Instant::now();
+                                    let mut hosts = network::discover_hosts(320, 64).await;
+                                    hosts = network::enrich_with_arp(hosts).await;
+                                    hosts = network::enrich_with_mdns_ssdp(hosts, 800).await;
+                                    let dur = start.elapsed().as_secs_f64();
+                                    let audit = report::AuditReport::new(hw, hosts, subnet, dur);
+                                    let j = audit.to_json_pretty().unwrap_or_else(|_| "{}".to_string());
+                                    let h = audit.to_html();
+                                    println!("  [scan] Listo background en {:.1}s, {} hosts", dur, audit.hosts.len());
+                                    let mut guard = cache_bg.lock().await;
+                                    *guard = Some((Instant::now(), j, h));
+                                });
+                            }
+                        }
+                        if path == "/json" {
+                            ("202 Accepted", r#"{"status":"scanning","retry":2}"#.to_string(), "application/json")
+                        } else {
+                            let loading = r#"<!DOCTYPE html><html><head><meta charset="utf-8"><meta http-equiv="refresh" content="2"><meta name="viewport" content="width=device-width,initial-scale=1"><title>AuDeep — Escaneando</title><style>body{margin:0;font-family:system-ui;background:#060a14;color:#e6edf3;display:grid;place-items:center;min-height:100vh} .card{background:#0f172a;border:1px solid #1e293b;border-radius:18px;padding:28px;text-align:center;max-width:480px} .spin{width:44px;height:44px;border:3px solid #1e293b;border-top-color:#38bdf8;border-radius:50%;animation:spin 1s linear infinite;margin:0 auto 14px} @keyframes spin{to{transform:rotate(360deg)}} .muted{color:#9aa4b2;font-size:13px} a{color:#38bdf8}</style></head><body><div class="card"><div class="spin"></div><h2>Escaneando red…</h2><p class="muted">Primer scan 8-10s (254 hosts + mDNS/SSDP). Esta página se recarga sola.</p><p class="muted">Si ves esto >12s, recarga manual <a href="/">/</a> o abre <a href="/health">/health</a></p><script>setTimeout(()=>location.reload(),2000);</script></div></body></html>"#;
+                            ("200 OK", loading.to_string(), "text/html; charset=utf-8")
+                        }
                     }
                 }
             };
