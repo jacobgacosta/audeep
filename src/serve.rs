@@ -8,12 +8,14 @@ pub async fn serve(addr: &str) -> std::io::Result<()> {
     println!("AuDeep serve en http://{}  (Ctrl+C para salir)", addr);
     println!("Endpoints: /  -> HTML (mamón), /json -> JSON, /health -> ok (scan cache 12s)");
 
-    // Cache simple: (Instant, json, html)
+    // Cache simple: (Instant, json, html) + flag scanning
     let cache: std::sync::Arc<tokio::sync::Mutex<Option<(Instant, String, String)>>> = std::sync::Arc::new(tokio::sync::Mutex::new(None));
+    let scanning: std::sync::Arc<tokio::sync::Mutex<bool>> = std::sync::Arc::new(tokio::sync::Mutex::new(false));
 
     loop {
         let (mut socket, peer) = listener.accept().await?;
         let cache = cache.clone();
+        let scanning = scanning.clone();
         tokio::spawn(async move {
             let mut buf = vec![0u8; 4096];
             let n = match socket.read(&mut buf).await {
@@ -37,38 +39,35 @@ pub async fn serve(addr: &str) -> std::io::Result<()> {
                     if let Some((j,h)) = cached {
                         if path == "/json" { ("200 OK", j, "application/json; charset=utf-8") } else { ("200 OK", h, "text/html; charset=utf-8") }
                     } else {
-                        // Si no hay cache, verificar si ya hay un scan en curso
-                        let is_scanning = { cache.lock().await.is_none() && {
-                            // intentar ver si ya lanzamos scan (usamos try_lock para no bloquear)
-                            // Si cache sigue None, lanzamos scan en background y retornamos loading
-                            true
-                        }};
-                        if is_scanning {
-                            // Lanzar scan en background solo una vez
+                        let should_spawn = {
+                            let mut s = scanning.lock().await;
+                            if *s { false } else { *s = true; true }
+                        };
+                        if should_spawn {
                             let cache_bg = cache.clone();
-                            // Evitar lanzar múltiples scans concurrentes: check via try
-                            let should_spawn = {
-                                let g = cache_bg.try_lock();
-                                g.is_ok() && g.unwrap().is_none()
-                            };
-                            if should_spawn {
-                                tokio::spawn(async move {
-                                    println!("  [scan] Generando reporte background para {}...", peer);
-                                    let hw = hardware::collect_hardware_info();
-                                    let subnet = network::local_subnet_cidr();
-                                    let start = Instant::now();
-                                    let mut hosts = network::discover_hosts(320, 64).await;
-                                    hosts = network::enrich_with_arp(hosts).await;
-                                    hosts = network::enrich_with_mdns_ssdp(hosts, 800).await;
-                                    let dur = start.elapsed().as_secs_f64();
-                                    let audit = report::AuditReport::new(hw, hosts, subnet, dur);
-                                    let j = audit.to_json_pretty().unwrap_or_else(|_| "{}".to_string());
-                                    let h = audit.to_html();
-                                    println!("  [scan] Listo background en {:.1}s, {} hosts", dur, audit.hosts.len());
+                            let scanning_bg = scanning.clone();
+                            tokio::spawn(async move {
+                                println!("  [scan] Generando reporte background para {}...", peer);
+                                let hw = hardware::collect_hardware_info();
+                                let subnet = network::local_subnet_cidr();
+                                let start = Instant::now();
+                                let mut hosts = network::discover_hosts(320, 64).await;
+                                hosts = network::enrich_with_arp(hosts).await;
+                                hosts = network::enrich_with_mdns_ssdp(hosts, 800).await;
+                                let dur = start.elapsed().as_secs_f64();
+                                let audit = report::AuditReport::new(hw, hosts, subnet, dur);
+                                let j = audit.to_json_pretty().unwrap_or_else(|_| "{}".to_string());
+                                let h = audit.to_html();
+                                println!("  [scan] Listo background en {:.1}s, {} hosts", dur, audit.hosts.len());
+                                {
                                     let mut guard = cache_bg.lock().await;
                                     *guard = Some((Instant::now(), j, h));
-                                });
-                            }
+                                }
+                                {
+                                    let mut s = scanning_bg.lock().await;
+                                    *s = false;
+                                }
+                            });
                         }
                         if path == "/json" {
                             ("202 Accepted", r#"{"status":"scanning","retry":2}"#.to_string(), "application/json")
@@ -81,7 +80,7 @@ pub async fn serve(addr: &str) -> std::io::Result<()> {
             };
 
             let resp = format!(
-                "HTTP/1.1 {}\r\nContent-Type: {}\r\nContent-Length: {}\r\nCache-Control: no-cache\r\nConnection: close\r\n\r\n{}",
+                "HTTP/1.1 {}\r\nContent-Type: {}\r\nContent-Length: {}\r\nCache-Control: no-cache\r\nConnection: close\r\nAccess-Control-Allow-Origin: *\r\nAccess-Control-Allow-Methods: GET, OPTIONS\r\nAccess-Control-Allow-Headers: *\r\n\r\n{}",
                 status,
                 ctype,
                 body.len(),

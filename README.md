@@ -1,49 +1,62 @@
-# AuDeep — Auditor de Hardware y Red (Rust)
+# AuDeep — Auditor de Hardware y Red (Rust) · Backend
 
-Herramienta offline, portable (USB) y plug&play (Raspberry Pi) para inventario de hardware, descubrimiento de red, escaneo de puertos y detección básica de vulnerabilidades. Un solo binario estático, sin dependencias.
+Herramienta offline, portable (USB) y plug&play (Raspberry Pi) para inventario de hardware, descubrimiento de red, escaneo de puertos y detección de vulnerabilidades. Un solo binario estático, sin dependencias. **Proyecto independiente y limpio** (ver `audeep-web` para frontend).
 
 ## Características
-- **Hardware local** (`hardware.rs`): OS, CPU (marca/vendor/cores/freq), RAM, discos, interfaces (MAC) via `sysinfo 0.30`.
-- **Descubrimiento** (`network.rs`): subnet /24 via UDP trick, 254 hosts con 64 tareas paralelas, `is_host_alive` por TCP 80/445/22/53 + `ping` binario fallback, ARP `arp -a` / `/proc/net/arp` + OUI `assets/oui.json` (~90 entradas).
-- **Escáner** (`scanner.rs`): `tokio` async, 21 puertos comunes, banner grab 800ms, `COMMON_PORTS`.
-- **Vuln** (`vuln.rs`): DB offline `assets/vuln_db.json` (7 CVEs: EternalBlue, BlueKeep, Heartbleed...), correlación por puerto/banners.
-- **Reporte** (`report.rs`): JSON + HTML dark autocontenido (sin CDN).
+- **Hardware** `src/hardware.rs:1` OS/CPU/RAM/Discos/IFaces/Sensores (`sysinfo 0.30` + `Components` + `load_avg`)
+- **Descubrimiento** `src/network.rs:1` subnet `/24` UDP trick, 254 hosts 64 tasks, `is_host_alive` TCP 80/445/22/53 + `ping` TTL, `arp -a` + OUI 40k `assets/oui_full.json:1` + `locally-administered`, reverse DNS `dns-lookup` + `mdns-sd` + `SSDP` M-SEARCH
+- **Escáner** `src/scanner.rs:1` `tokio` async 21 `COMMON_PORTS` banner 800ms
+- **Vuln** `src/vuln.rs:1` SQLite offline `assets/cve.db:1` (7 curados + NVD fetch via `xtask` `rusqlite bundled`) + `xtask fetch-nvd` 90d window
+- **Reporte** `src/report.rs:1` JSON + HTML crema hack minimalista offline (Canvas 2D, sin CDN, `file://` + `http://127.0.0.1:8766/`)
+- **Serve** `src/serve.rs:1` `TcpListener` `0.0.0.0:8766` (evita Koupper 8080) `GET /` `GET /json` `GET /health` con `Access-Control-Allow-Origin: *` + cache 12s + loading non-blocking
+- **CLI** `src/main.rs:1` `clap 4 derive` `--no-scan` `--json` `--html` `--serve [ADDR]` (default `8766`)
 
 ## Uso rápido (Windows)
 ```pwsh
 $env:PATH="C:\Users\jacob\AppData\Local\Temp\zig-x86_64-windows-0.16.0;"+$env:PATH
 cargo zigbuild --target x86_64-pc-windows-gnu
+.\target\x86_64-pc-windows-gnu\debug\audeep.exe --help
 .\target\x86_64-pc-windows-gnu\debug\audeep.exe
-# o sin escanear: .\audeep.exe --no-scan
-# salida custom: .\audeep.exe --json=.\out.json --html=.\out.html
+# 14 hosts 3 vulns -> audeep_reporte.html (crema 35KB) + audeep_reporte.json
+start audeep_reporte.html
+# o serve live:
+.\target\x86_64-pc-windows-gnu\debug\audeep.exe --serve
+# abre http://127.0.0.1:8766/ (Escaneando… 0.01s -> mamón 10s bg)
 ```
 
-## Opciones CLI
-- `--no-scan` — solo hardware
-- `--json=PATH` — JSON destino
-- `--html=PATH` — HTML destino
-- por defecto guarda `audeep_reporte.json` + `audeep_reporte.html` en cwd
+## CLI
+- `--no-scan` solo hardware
+- `--json <PATH>` `--html <PATH>` salida custom
+- `--serve [ADDR]` default `0.0.0.0:8766` (usa `8766` para no pisar Koupper 8080)
+- `--help` `--version` via `clap`
 
-## Raspberry Pi (ver `deploy/README.md`)
+## Frontend independiente
+Ver `../audeep-web/README.md` (Vite + React 19 + TS + Chart.js). Consume `http://127.0.0.1:8766/json` polling 5s.
+```pwsh
+cd ../audeep-web; npm install; npm run dev # http://localhost:5173
+```
+
+## Raspberry Pi / USB (ver `deploy/`)
 ```bash
-# Build cruzado con zig (desde Windows):
-powershell -File scripts/build_rpi.ps1  # genera aarch64/armv7/musl
+powershell -File scripts/build_rpi.ps1 # aarch64/armv7/musl 7.2-7.6MB
 scp target/aarch64-unknown-linux-gnu/release/audeep pi@pi:/tmp/
 ssh pi@pi 'sudo mv /tmp/audeep /usr/local/bin/ && sudo systemctl enable --now audeep'
+# AP: sudo audeep-ap on # AuDeep-Auditor 192.168.4.1 http://192.168.4.1
 ```
 
-## Estructura
+## Estructura limpia
 ```
 audeep/
-  assets/oui.json, vuln_db.json  # embebidos con include_str!
-  src/hardware.rs, scanner.rs, network.rs, vuln.rs, report.rs, main.rs
-  deploy/systemd/audeep.service, audeep-usb@.service
-  deploy/usb/99-audeep-usb.rules, audeep-usb.sh
-  scripts/build_rpi.ps1, build_rpi.sh
+  Cargo.toml (workspace + xtask)
+  src/{main,hardware,network,scanner,vuln,report,serve}.rs
+  assets/{oui.json,oui_full.json(40k),vuln_db.json,cve.db}
+  xtask/src/main.rs (build-cve / fetch-nvd --limit 30 --merge)
+  .cargo/config.toml (alias xtask)
+  deploy/{systemd,usb,ap}  scripts/build_rpi.ps1
 ```
+Best practices: `cargo fmt` + `clippy`, `serde` derive, `tokio` full, `sysinfo` 0.30, `clap` derive, `rusqlite bundled` + `mdns-sd`, `xtask` Rust puro (sin Python), `include_str!`/`include_bytes!` offline.
 
-## Próximos pasos
-- OUI completa IEEE (28000 entradas) comprimida
-- CVE feed NVD offline con SQLite
-- mDNS/SSDP para naming
-- Modo AP Wi-Fi en Pi (portal cautivo)
+## Docs
+- `knowledge/dispositivo_auditor.md` diseño inicial
+- `deploy/ap/README.md` modo AP
+- `xtask fetch-nvd --help` NVD API 2.0 90d
