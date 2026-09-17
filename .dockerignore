@@ -1,0 +1,5 @@
+target/
+.git/
+audeep_reporte.html
+audeep_reporte.json
+*.log
