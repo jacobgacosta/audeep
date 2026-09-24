@@ -75,32 +75,50 @@ fn infer_vendor_from_host(h: &HostInfo) -> Option<String> {
     let mdns_lower = h.mdns_names.iter().map(|s| s.to_lowercase()).collect::<Vec<_>>().join(" ");
     let ssdp_lower = h.ssdp_location.as_ref().map(|s| s.to_lowercase()).unwrap_or_default();
     let banner_lower = h.open_ports.iter().filter_map(|p| p.banner.as_ref()).map(|b| b.to_lowercase()).collect::<Vec<_>>().join(" ");
-    let all = format!("{} {} {} {} {}", lower_host, mdns_lower, ssdp_lower, banner_lower, h.ip);
+    let service_lower = h.open_ports.iter().filter_map(|p| p.service_hint.as_ref()).map(|s| s.to_lowercase()).collect::<Vec<_>>().join(" ");
+    let all = format!("{} {} {} {} {} {}", lower_host, mdns_lower, ssdp_lower, banner_lower, service_lower, h.ip);
+    // Extracción real: buscar indicios en banners/mDNS/hostname/SSDP, sin hardcode de IP
     if all.contains("jetson") || all.contains("tegra") {
-        return Some("NVIDIA Jetson (inferido por mDNS/hostname)".to_string());
+        return Some("NVIDIA Jetson (deducido por banner/mDNS)".to_string());
     }
-    if all.contains("xiaomi") || all.contains("redmi") {
-        return Some("Xiaomi (inferido)".to_string());
+    if all.contains("xiaomi") || all.contains("redmi") || all.contains("mi ") {
+        return Some("Xiaomi (deducido)".to_string());
     }
     if all.contains("tenda") {
-        return Some("Tenda (inferido)".to_string());
+        return Some("Tenda (deducido)".to_string());
     }
-    if all.contains("espressif") || all.contains("esp-") {
-        return Some("Espressif (inferido)".to_string());
+    if all.contains("espressif") || all.contains("esp32") || all.contains("esp8266") {
+        return Some("Espressif (deducido)".to_string());
     }
-    if all.contains("raspberry") || all.contains("rpi") || all.contains("bcm") {
-        return Some("Raspberry Pi (inferido)".to_string());
-    }
-    // Caso específico: Jetson Nano en 192.168.1.15 con Ubuntu 8.9 y MAC virtual 9a:43
-    if h.ip == "192.168.1.15" && h.open_ports.iter().any(|p| p.port==22) {
-        return Some("NVIDIA Jetson Nano (192.168.1.15, inferido por SSH Ubuntu)".to_string());
+    if all.contains("raspberry") || all.contains("rpi") || all.contains("bcm27") || all.contains("bcm28") {
+        return Some("Raspberry Pi (deducido por mDNS/hostname/banner)".to_string());
     }
     if !h.mdns_names.is_empty() {
         let first = h.mdns_names[0].split('.').next().unwrap_or("mDNS");
-        return Some(format!("mDNS: {}", first));
+        return Some(format!("mDNS: {} (nombre real extraído)", first));
     }
-    if h.hostname.is_some() && h.hostname.as_ref().unwrap() != "—" {
-        return None; // ya tiene hostname, no inferir
+    None
+}
+
+async fn http_infer_vendor(ip: &str) -> Option<String> {
+    // Intento real HTTP GET a 80/8080 con timeout 700ms, busca Jetson/RPi en headers/body
+    for port in [80, 8080, 8000] {
+        let url = format!("http://{}:{}/", ip, port);
+        let client = match reqwest::Client::builder().timeout(std::time::Duration::from_millis(700)).build() {
+            Ok(c) => c,
+            Err(_) => continue,
+        };
+        if let Ok(resp) = client.get(&url).send().await {
+            let headers = format!("{:?}", resp.headers()).to_lowercase();
+            let text = resp.text().await.unwrap_or_default().to_lowercase();
+            let all = format!("{} {}", headers, text);
+            if all.contains("jetson") || all.contains("tegra") || (all.contains("nvidia") && all.contains("l4t")) {
+                return Some("NVIDIA Jetson (deducido por HTTP)".to_string());
+            }
+            if all.contains("raspberry") || all.contains("rpi") {
+                return Some("Raspberry Pi (deducido por HTTP)".to_string());
+            }
+        }
     }
     None
 }
@@ -532,11 +550,15 @@ pub async fn enrich_with_mdns_ssdp(mut hosts: Vec<HostInfo>, timeout_ms: u64) ->
         if let Some(loc) = ssdp_map.get(&h.ip) {
             h.ssdp_location = Some(loc.clone());
         }
-        // Si vendor es Virtual/Locally o None, inferir por mDNS/hostname/SSDP/banners
+        // Si vendor es Virtual/Locally o None, inferir por mDNS/hostname/SSDP/banners y HTTP real
         let needs_infer = h.vendor.is_none() || h.vendor.as_ref().map(|v| v.contains("Virtual") || v.contains("Locally")).unwrap_or(false);
         if needs_infer {
             if let Some(inferred) = infer_vendor_from_host(h) {
                 h.vendor = Some(inferred);
+            } else if h.open_ports.iter().any(|p| p.port==80 || p.port==8080 || p.port==8000) {
+                if let Some(http_v) = http_infer_vendor(&h.ip).await {
+                    h.vendor = Some(http_v);
+                }
             }
         }
     }
