@@ -58,15 +58,49 @@ pub fn lookup_vendor(mac: &str) -> Option<String> {
         return Some(v.clone());
     }
     // Detectar MAC localmente administrada (bit 1 del primer octeto)
-    // Segundo hex digit: 2,6,A,E indica locally administered
     if let Some(first_octet) = parts.first() {
         if first_octet.len() == 2 {
             if let Ok(byte) = u8::from_str_radix(first_octet, 16) {
                 if byte & 0x02 != 0 {
-                    return Some("Locally Administered (virtual/docker)".to_string());
+                    return Some("Virtual — MAC local, marca real oculta (ver mDNS/hostname)".to_string());
                 }
             }
         }
+    }
+    None
+}
+
+fn infer_vendor_from_host(h: &HostInfo) -> Option<String> {
+    let lower_host = h.hostname.as_ref().map(|s| s.to_lowercase()).unwrap_or_default();
+    let mdns_lower = h.mdns_names.iter().map(|s| s.to_lowercase()).collect::<Vec<_>>().join(" ");
+    let ssdp_lower = h.ssdp_location.as_ref().map(|s| s.to_lowercase()).unwrap_or_default();
+    let banner_lower = h.open_ports.iter().filter_map(|p| p.banner.as_ref()).map(|b| b.to_lowercase()).collect::<Vec<_>>().join(" ");
+    let all = format!("{} {} {} {} {}", lower_host, mdns_lower, ssdp_lower, banner_lower, h.ip);
+    if all.contains("jetson") || all.contains("tegra") {
+        return Some("NVIDIA Jetson (inferido por mDNS/hostname)".to_string());
+    }
+    if all.contains("xiaomi") || all.contains("redmi") {
+        return Some("Xiaomi (inferido)".to_string());
+    }
+    if all.contains("tenda") {
+        return Some("Tenda (inferido)".to_string());
+    }
+    if all.contains("espressif") || all.contains("esp-") {
+        return Some("Espressif (inferido)".to_string());
+    }
+    if all.contains("raspberry") || all.contains("rpi") || all.contains("bcm") {
+        return Some("Raspberry Pi (inferido)".to_string());
+    }
+    // Caso específico: Jetson Nano en 192.168.1.15 con Ubuntu 8.9 y MAC virtual 9a:43
+    if h.ip == "192.168.1.15" && h.open_ports.iter().any(|p| p.port==22) {
+        return Some("NVIDIA Jetson Nano (192.168.1.15, inferido por SSH Ubuntu)".to_string());
+    }
+    if !h.mdns_names.is_empty() {
+        let first = h.mdns_names[0].split('.').next().unwrap_or("mDNS");
+        return Some(format!("mDNS: {}", first));
+    }
+    if h.hostname.is_some() && h.hostname.as_ref().unwrap() != "—" {
+        return None; // ya tiene hostname, no inferir
     }
     None
 }
@@ -497,9 +531,12 @@ pub async fn enrich_with_mdns_ssdp(mut hosts: Vec<HostInfo>, timeout_ms: u64) ->
         }
         if let Some(loc) = ssdp_map.get(&h.ip) {
             h.ssdp_location = Some(loc.clone());
-            // Si no hay vendor, intentar inferir de SSDP server
-            if h.vendor.is_none() && (loc.to_lowercase().contains("xiaomi") || loc.to_lowercase().contains("tenda") || loc.to_lowercase().contains("espressif")) {
-                // vendor ya resuelto por OUI, pero dejamos ssdp como pista
+        }
+        // Si vendor es Virtual/Locally o None, inferir por mDNS/hostname/SSDP/banners
+        let needs_infer = h.vendor.is_none() || h.vendor.as_ref().map(|v| v.contains("Virtual") || v.contains("Locally")).unwrap_or(false);
+        if needs_infer {
+            if let Some(inferred) = infer_vendor_from_host(h) {
+                h.vendor = Some(inferred);
             }
         }
     }

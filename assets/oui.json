@@ -25,7 +25,7 @@
   "1C:E8:9E": "Huaqin / Xiaomi (detectado)",
   "F4:BE:EC": "Shenzhen Bilian (TP-Link genérico)",
   "90:DD:5D": "Espressif / nodeMCU",
-  "9A:43:22": "Locally Administered (Docker/WSL)",
+  "9A:43:22": "Virtual — MAC local, marca real oculta (ver mDNS/hostname)",
   "00:11:32": "Synology",
   "00:04:20": "Slim Devices / Logitech",
   "00:0C:29": "VMware",
