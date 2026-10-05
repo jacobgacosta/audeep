@@ -162,4 +162,50 @@ esac
 
 ---
 
+## 17. Los 21 puertos que se prueban
+
+**Qué es:** 21 (FTP), 22 (SSH), 23 (Telnet), 25 (SMTP), 53 (DNS), 80 (HTTP), 110 (POP3), 135 (MSRPC), 139 (NetBIOS), 143 (IMAP), 443 (HTTPS), 445 (SMB), 993/995 (IMAP/POP3S), 1723 (PPTP VPN), 3306 (MySQL), 3389 (RDP), 5432 (PostgreSQL), 5900 (VNC), 8080/8443 (HTTP alt).
+
+**Para qué sirve:** saber qué cubre el scan y qué no: un servicio en otro puerto (ej: 3000, 8000) no se verá. Son los más atacados, no todos (`COMMON_PORTS` en `scanner.rs`).
+
+---
+
+## 18. xtask: ampliar la base de vulnerabilidades
+
+**Qué es:** mini-herramienta Rust con `build-cve` (reconstruye `cve.db` del JSON local) y `fetch-nvd` (descarga CVEs reales de la API NVD 2.0, ventana 90 días, `--limit` hasta 2000, `--merge` conserva los 7 curados).
+
+**Para qué sirve:** pasar de 7 a 37+ CVEs sin editar código. Tras traerlos hay que recompilar para que queden embebidos (`xtask/src/main.rs`).
+
+---
+
+## 19. Cache de 12s y estado «escaneando»
+
+**Qué es:** el primer `/json` tarda ~10s (scan en background, responde `202 {status:scanning}`) y el resultado se cachea 12s.
+
+**Para qué sirve:** «Conectando…» no es error, es el primer scan. El log muestra `[scan] Generando/Listo` con duración y nº de hosts (`serve.rs`).
+
+---
+
+## 20. Cómo leer el dashboard
+
+**Qué es:** 4 stats, 3 gráficas (vendors, dona de severidad, puertos), buscador + filtro por severidad («Sanos» incluidos), tabla de 9 columnas, drawer por host con banners y links NVD, doble click copia la IP, polling a `/json` cada 5s.
+
+---
+
+## 21. Seguridad del propio serve
+
+**Qué es:** el 8766 **no pide contraseña** y escucha en toda tu red (`0.0.0.0`), exponiendo tu inventario en `/json`.
+
+**Para qué sirve saberlo:** úsalo solo en red local de confianza; no lo expongas a internet (pendiente: JWT + TLS).
+
+---
+
+## 22. Dónde vive cada cosa
+
+**Qué es:** dos repos: `audeep` (Rust: CLI + serve 8766) y `audeep-web` (React: front 5111, sin datos propios, todo de `/json`).
+
+**Para qué sirve:** si el front se queda en «Conectando…», mira el back. Con `VITE_AUDEEP_URL` apuntas el front a otra IP (ej: la Raspberry).
+
+---
+
 *Origen: `knowledge/dispositivo_auditor.md` + `docs/architecture.md` + `docs/guia-conceptos.md`. Este archivo es la referencia técnica; la guía simple vive en `guia-conceptos.md`.*
