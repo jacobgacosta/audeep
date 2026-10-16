@@ -3,64 +3,83 @@
     "cve": "CVE-2016-0777",
     "severity": "alta",
     "service": "SSH",
-    "affected": "OpenSSH < 7.1p2",
-    "description": "Information leak via roaming, permite leer memoria del cliente.",
-    "match_banner_contains": ["OpenSSH_6.", "OpenSSH_7.0", "OpenSSH_7.1p1"],
-    "recommendation": "Actualizar a OpenSSH >= 7.1p2"
+    "affected": "OpenSSH 6.0 - 7.1 (roaming del cliente)",
+    "description": "El cliente SSH con roaming habilitado puede filtrar la clave privada al servidor.",
+    "match_banner_contains": [],
+    "match_ports": [],
+    "match_versions": [
+      { "product": "OpenSSH", "min": "6.0", "max": "7.1" }
+    ],
+    "recommendation": "Actualizar OpenSSH y poner UseRoaming no en el cliente."
   },
   {
     "cve": "CVE-2018-15473",
     "severity": "media",
     "service": "SSH",
-    "affected": "OpenSSH < 7.7",
-    "description": "User enumeration via timing en auth.",
-    "match_banner_contains": ["OpenSSH_7.0", "OpenSSH_7.1", "OpenSSH_7.2", "OpenSSH_7.3", "OpenSSH_7.4", "OpenSSH_7.5", "OpenSSH_7.6"],
-    "recommendation": "Actualizar a OpenSSH >= 7.7"
-  },
-  {
-    "cve": "CVE-2017-0144",
-    "severity": "critica",
-    "service": "SMB",
-    "affected": "SMBv1 Windows < MS17-010",
-    "description": "EternalBlue - ejecución remota sin auth.",
-    "match_ports": [445, 139],
+    "affected": "OpenSSH 7.0 - 7.6",
+    "description": "Enumeracion de usuarios validos por diferencia de tiempo en la autenticacion.",
     "match_banner_contains": [],
-    "recommendation": "Deshabilitar SMBv1, parche MS17-010, bloquear 445 desde WAN"
-  },
-  {
-    "cve": "CVE-2019-0708",
-    "severity": "critica",
-    "service": "RDP",
-    "affected": "Windows RDP < patch 2019-05",
-    "description": "BlueKeep - RCE wormable en RDP.",
-    "match_ports": [3389],
-    "recommendation": "Parchear RDP, habilitar NLA, no exponer 3389 a internet"
-  },
-  {
-    "cve": "CVE-2014-0160",
-    "severity": "alta",
-    "service": "HTTPS",
-    "affected": "OpenSSL 1.0.1 < 1.0.1g",
-    "description": "Heartbleed - lectura de memoria, robo de claves.",
-    "match_banner_contains": ["OpenSSL/1.0.1"],
-    "recommendation": "Actualizar OpenSSL, revocar certs, cambiar claves"
-  },
-  {
-    "cve": "CVE-2021-44228",
-    "severity": "critica",
-    "service": "HTTP",
-    "affected": "Log4j 2.0-2.14.1",
-    "description": "Log4Shell - RCE via JNDI en cabeceras HTTP.",
-    "match_banner_contains": ["Apache/2.4.49", "Apache/2.4.50"],
-    "recommendation": "Actualizar Log4j >= 2.17, WAF, revisar logs"
+    "match_ports": [],
+    "match_versions": [
+      { "product": "OpenSSH", "min": "7.0", "max": "7.6" }
+    ],
+    "recommendation": "Actualizar OpenSSH a 7.7 o superior."
   },
   {
     "cve": "CVE-2023-38408",
     "severity": "alta",
     "service": "SSH",
-    "affected": "OpenSSH < 9.3p2 (forwarded ssh-agent)",
-    "description": "RCE en ssh-agent PKCS#11.",
-    "match_banner_contains": ["OpenSSH_8.", "OpenSSH_9.0", "OpenSSH_9.1", "OpenSSH_9.2", "OpenSSH_9.3p1"],
-    "recommendation": "Actualizar a OpenSSH >= 9.3p2"
+    "affected": "OpenSSH 8.0 - 9.3 (agente ssh-agent reenviado)",
+    "description": "Ejecucion remota via PKCS#11 en ssh-agent con forwarding habilitado.",
+    "match_banner_contains": [],
+    "match_ports": [],
+    "match_versions": [
+      { "product": "OpenSSH", "min": "8.0", "max": "9.3" }
+    ],
+    "recommendation": "Actualizar OpenSSH y evitar AgentForwarding hacia hosts no confiables."
+  },
+  {
+    "cve": "CVE-2017-0144",
+    "severity": "critica",
+    "service": "SMB",
+    "affected": "SMBv1 (Windows Vista a 2012 R2 sin MS17-010)",
+    "description": "EternalBlue: ejecucion remota de codigo sin autenticacion sobre SMBv1. Solo se marca si el equipo negocia SMB1 de verdad.",
+    "match_banner_contains": ["SMB1"],
+    "match_ports": [445],
+    "match_versions": [],
+    "recommendation": "Deshabilitar SMBv1, aplicar MS17-010 y bloquear el 445 desde WAN."
+  },
+  {
+    "cve": "CVE-2019-0708",
+    "severity": "critica",
+    "service": "RDP",
+    "affected": "RDP en Windows 7 / Server 2008 sin parche",
+    "description": "BlueKeep: ejecucion remota de codigo por RDP. El puerto abierto no confirma la version, hay que verificar el parche.",
+    "match_banner_contains": [],
+    "match_ports": [3389],
+    "match_versions": [],
+    "recommendation": "Aplicar el parche de BlueKeep, exigir NLA y no exponer RDP a Internet."
+  },
+  {
+    "cve": "CVE-2014-0160",
+    "severity": "alta",
+    "service": "HTTPS",
+    "affected": "OpenSSL 1.0.1 a 1.0.1f",
+    "description": "Heartbleed: lectura de memoria del proceso TLS (claves y sesiones).",
+    "match_banner_contains": ["OpenSSL/1.0.1"],
+    "match_ports": [],
+    "match_versions": [],
+    "recommendation": "Actualizar OpenSSL, rotar certificados y claves privadas."
+  },
+  {
+    "cve": "CVE-2021-44228",
+    "severity": "critica",
+    "service": "HTTP",
+    "affected": "Log4j 2.0-beta9 a 2.14.1 expuesto por HTTP",
+    "description": "Log4Shell: ejecucion remota via JNDI en cabeceras registradas por Log4j.",
+    "match_banner_contains": ["Apache/2.4.49", "Apache/2.4.50"],
+    "match_ports": [],
+    "match_versions": [],
+    "recommendation": "Actualizar Log4j a 2.17+ y bloquear egreso JNDI/LDAP."
   }
 ]

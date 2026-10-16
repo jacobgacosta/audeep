@@ -1,6 +1,7 @@
 mod arp;
 mod hardware;
 mod network;
+mod probe;
 mod report;
 mod scanner;
 mod serve;

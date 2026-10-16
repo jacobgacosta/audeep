@@ -1,3 +1,4 @@
+use crate::probe;
 use serde::Serialize;
 use std::net::{IpAddr, SocketAddr};
 use std::time::Duration;
@@ -110,6 +111,16 @@ pub fn service_hint(port: u16) -> Option<String> {
     Some(hint.to_string())
 }
 
+/// En el 445 el "banner" es el dialecto SMB negociado: esa es la diferencia
+/// entre "hay un SMB" y "hay un SMB que todavia acepta SMBv1".
+async fn smb_dialect_banner(ip: IpAddr, timeout_ms: u64) -> Option<String> {
+    match probe::smb1_enabled(ip, timeout_ms).await {
+        Some(true) => Some("SMB1 habilitado".to_string()),
+        Some(false) => Some("SMB2/3".to_string()),
+        None => None,
+    }
+}
+
 async fn grab_banner(stream: &mut TcpStream, banner_ms: u64) -> Option<String> {
     let mut buf = vec![0u8; 1024];
     match timeout(Duration::from_millis(banner_ms), stream.read(&mut buf)).await {
@@ -181,6 +192,12 @@ pub async fn scan_target(ip: IpAddr, ports: &[u16], timeout_ms: u64) -> Vec<Port
         }
     }
     opens.sort_by_key(|r| r.port);
+    // Confirmacion activa del 445: se negocia SMB1 en lugar de suponerlo.
+    for res in opens.iter_mut() {
+        if res.port == 445 && res.banner.is_none() {
+            res.banner = smb_dialect_banner(ip, timeout_ms).await;
+        }
+    }
     opens
 }
 

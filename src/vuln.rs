@@ -1,5 +1,16 @@
+use crate::probe;
 use crate::scanner::PortResult;
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
+use std::path::Path;
+
+/// Rango de versiones afectadas por un aviso, por producto.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VersionRange {
+    pub product: String,
+    pub min: String,
+    pub max: String,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VulnEntry {
@@ -12,6 +23,8 @@ pub struct VulnEntry {
     pub match_banner_contains: Vec<String>,
     #[serde(default)]
     pub match_ports: Vec<u16>,
+    #[serde(default)]
+    pub match_versions: Vec<VersionRange>,
     pub recommendation: String,
 }
 
@@ -27,8 +40,10 @@ pub struct Finding {
 }
 
 static DB_JSON: &str = include_str!("../assets/vuln_db.json");
-// cve.db embebido como fallback binario (generado via scripts/build_cve_db.py o xtask)
+// cve.db embebido como complemento (NVD): el JSON curado manda.
 static DB_SQLITE_BYTES: &[u8] = include_bytes!("../assets/cve.db");
+
+const SELECT_SQL: &str = "SELECT cve, severity, service, affected, description, match_banner_contains, match_ports, recommendation FROM vulnerabilities";
 
 fn row_to_entry(row: &rusqlite::Row<'_>) -> rusqlite::Result<VulnEntry> {
     let banner_json: String = row.get(5)?;
@@ -41,20 +56,19 @@ fn row_to_entry(row: &rusqlite::Row<'_>) -> rusqlite::Result<VulnEntry> {
         description: row.get(4)?,
         match_banner_contains: serde_json::from_str(&banner_json).unwrap_or_default(),
         match_ports: serde_json::from_str(&ports_json).unwrap_or_default(),
+        // La base SQLite no guarda rangos de version: los aporta el JSON curado.
+        match_versions: Vec::new(),
         recommendation: row.get(7)?,
     })
 }
 
-const SELECT_SQL: &str = "SELECT cve, severity, service, affected, description, match_banner_contains, match_ports, recommendation FROM vulnerabilities";
-
-fn load_db_from_sqlite_bytes(bytes: &[u8]) -> Option<Vec<VulnEntry>> {
+fn entries_from_sqlite_bytes(bytes: &[u8]) -> Option<Vec<VulnEntry>> {
     use rusqlite::Connection;
     use std::io::Write;
-    // rusqlite bundled no expone deserialize directo: se materializa el archivo
-    // embebido en temp **una sola vez** (load_db está cacheado con OnceLock).
     if bytes.len() < 100 || &bytes[0..6] != b"SQLite" {
         return None;
     }
+    // Se materializa el archivo embebido en temp **una sola vez** (load_db cachea).
     let tmp = std::env::temp_dir().join(format!("audeep_cve_{}.db", std::process::id()));
     let res = (|| -> Option<Vec<VulnEntry>> {
         let mut f = std::fs::File::create(&tmp).ok()?;
@@ -69,7 +83,7 @@ fn load_db_from_sqlite_bytes(bytes: &[u8]) -> Option<Vec<VulnEntry>> {
     res
 }
 
-fn load_db_from_sqlite_file(path: &std::path::Path) -> Option<Vec<VulnEntry>> {
+fn entries_from_sqlite_file(path: &Path) -> Option<Vec<VulnEntry>> {
     use rusqlite::Connection;
     if !path.exists() {
         return None;
@@ -81,32 +95,39 @@ fn load_db_from_sqlite_file(path: &std::path::Path) -> Option<Vec<VulnEntry>> {
     if out.is_empty() { None } else { Some(out) }
 }
 
-fn load_db_uncached() -> Vec<VulnEntry> {
-    // 1) Intenta archivo junto al binario (para USB actualizable sin recompilar)
+/// CVEs extra que aporta la base SQLite (junto al binario, en cwd o embebida).
+fn extra_from_sqlite() -> Vec<VulnEntry> {
     if let Ok(exe) = std::env::current_exe() {
         if let Some(dir) = exe.parent() {
             for cand in [dir.join("cve.db"), dir.join("assets/cve.db")] {
-                if let Some(v) = load_db_from_sqlite_file(&cand) {
+                if let Some(v) = entries_from_sqlite_file(&cand) {
                     return v;
                 }
             }
         }
     }
-    // 2) Intenta assets/cve.db en cwd (dev)
-    for cand in [
-        std::path::Path::new("assets/cve.db"),
-        std::path::Path::new("cve.db"),
-    ] {
-        if let Some(v) = load_db_from_sqlite_file(cand) {
+    for cand in [Path::new("assets/cve.db"), Path::new("cve.db")] {
+        if let Some(v) = entries_from_sqlite_file(cand) {
             return v;
         }
     }
-    // 3) Intenta bytes embebidos
-    if let Some(v) = load_db_from_sqlite_bytes(DB_SQLITE_BYTES) {
-        return v;
+    entries_from_sqlite_bytes(DB_SQLITE_BYTES).unwrap_or_default()
+}
+
+/// Base curada + lo que aporte la SQLite, sin duplicar CVEs.
+///
+/// El JSON es la fuente de verdad de las reglas escritas a mano (incluidos los
+/// rangos de versión, que la tabla SQLite no guarda); la SQLite solo agrega
+/// CVEs que el curado no cubre (por ejemplo los que baja `xtask fetch-nvd`).
+fn load_db_uncached() -> Vec<VulnEntry> {
+    let mut entries: Vec<VulnEntry> = serde_json::from_str(DB_JSON).unwrap_or_default();
+    let mut known: HashSet<String> = entries.iter().map(|e| e.cve.clone()).collect();
+    for e in extra_from_sqlite() {
+        if known.insert(e.cve.clone()) {
+            entries.push(e);
+        }
     }
-    // 4) Fallback JSON embebido
-    serde_json::from_str(DB_JSON).unwrap_or_default()
+    entries
 }
 
 /// Base de vulnerabilidades, cargada una sola vez por proceso.
@@ -120,6 +141,29 @@ pub fn load_db() -> &'static [VulnEntry] {
     CACHE.get_or_init(load_db_uncached).as_slice()
 }
 
+fn banner_matches(entry: &VulnEntry, banner_upper: &str) -> bool {
+    !entry.match_banner_contains.is_empty()
+        && entry
+            .match_banner_contains
+            .iter()
+            .any(|needle| banner_upper.contains(&needle.to_uppercase()))
+}
+
+/// Acierto por versión: se parsea el banner del servicio y se compara contra
+/// los rangos publicados por producto.
+fn version_matches(entry: &VulnEntry, banner: Option<&str>) -> bool {
+    if entry.match_versions.is_empty() {
+        return false;
+    }
+    let Some((product, version)) = banner.and_then(probe::parse_ssh_banner) else {
+        return false;
+    };
+    entry.match_versions.iter().any(|r| {
+        r.product.eq_ignore_ascii_case(&product)
+            && probe::version_in_range(&version, &r.min, &r.max)
+    })
+}
+
 pub fn check_port(port: &PortResult, db: &[VulnEntry]) -> Vec<Finding> {
     let mut findings = Vec::new();
     let banner_upper = port
@@ -127,25 +171,26 @@ pub fn check_port(port: &PortResult, db: &[VulnEntry]) -> Vec<Finding> {
         .as_ref()
         .map(|b| b.to_uppercase())
         .unwrap_or_default();
-    let svc_hint = port.service_hint.clone().unwrap_or_default();
 
     for entry in db {
-        let port_match = !entry.match_ports.is_empty() && entry.match_ports.contains(&port.port);
-        let banner_match = !entry.match_banner_contains.is_empty()
-            && entry
-                .match_banner_contains
-                .iter()
-                .any(|needle| banner_upper.contains(&needle.to_uppercase()));
+        let port_rule = !entry.match_ports.is_empty();
+        let banner_rule = !entry.match_banner_contains.is_empty();
+        let version_rule = !entry.match_versions.is_empty();
 
-        // Con ambos criterios exige los dos; con uno solo, ese.
-        let should_flag = match (
-            entry.match_ports.is_empty(),
-            entry.match_banner_contains.is_empty(),
-        ) {
-            (false, false) => port_match && banner_match,
-            (false, true) => port_match,
-            (true, false) => banner_match,
-            (true, true) => false,
+        let port_match = port_rule && entry.match_ports.contains(&port.port);
+        let banner_match = banner_matches(entry, &banner_upper);
+        let version_match = version_matches(entry, port.banner.as_deref());
+
+        // Sin criterios no aplica. Si hay puerto + (banner|version), el puerto es
+        // obligatorio y después alcanza una de las dos señales de contenido.
+        let should_flag = if !port_rule && !banner_rule && !version_rule {
+            false
+        } else if port_rule && (banner_rule || version_rule) {
+            port_match && (banner_match || version_match)
+        } else {
+            (!port_rule || port_match)
+                && (!banner_rule || banner_match)
+                && (!version_rule || version_match)
         };
 
         if should_flag {
@@ -171,7 +216,7 @@ pub fn check_host(open_ports: &[PortResult]) -> Vec<Finding> {
         all.extend(check_port(p, db));
     }
     // dedup por CVE+port
-    let mut seen = std::collections::HashSet::new();
+    let mut seen = HashSet::new();
     all.retain(|f| seen.insert((f.cve.clone(), f.port)));
     all.sort_by(|a, b| {
         let ord = severity_rank(&b.severity).cmp(&severity_rank(&a.severity));
@@ -207,59 +252,92 @@ mod tests {
         }
     }
 
+    fn cves(findings: &[Finding]) -> Vec<String> {
+        findings.iter().map(|f| f.cve.clone()).collect()
+    }
+
     #[test]
-    fn db_is_loaded_once() {
-        let a = load_db();
-        let b = load_db();
+    fn db_merges_curated_json_with_sqlite() {
+        let db = load_db();
+        assert!(!db.is_empty());
         assert!(
-            !a.is_empty(),
-            "la base de vulnerabilidades no puede estar vacia"
-        );
-        assert!(
-            std::ptr::eq(a.as_ptr(), b.as_ptr()),
+            std::ptr::eq(db.as_ptr(), load_db().as_ptr()),
             "load_db debe estar cacheada"
         );
+        // Las reglas curadas traen rangos de version, que la SQLite no guarda.
+        let ssh = db.iter().find(|e| e.cve == "CVE-2018-15473").unwrap();
+        assert_eq!(ssh.match_versions.len(), 1);
+        // No hay CVEs repetidos entre JSON y SQLite
+        let unique: HashSet<&String> = db.iter().map(|e| &e.cve).collect();
+        assert_eq!(unique.len(), db.len());
     }
 
     #[test]
-    fn test_ssh_old_banner() {
-        let p = port(22, Some("SSH-2.0-OpenSSH_7.2p2"), "SSH");
-        let findings = check_port(&p, load_db());
-        assert!(findings.iter().any(|f| f.cve == "CVE-2018-15473"));
+    fn ssh_version_range_flags_affected_only() {
+        let viejo = port(22, Some("SSH-2.0-OpenSSH_7.2p2 Ubuntu-4ubuntu2.10"), "SSH");
+        let hallados = cves(&check_port(&viejo, load_db()));
+        assert!(
+            hallados.contains(&"CVE-2018-15473".to_string()),
+            "{hallados:?}"
+        );
+        assert!(
+            !hallados.contains(&"CVE-2023-38408".to_string()),
+            "{hallados:?}"
+        );
+
+        let nuevo = port(22, Some("SSH-2.0-OpenSSH_9.6p1"), "SSH");
+        let hallados = cves(&check_port(&nuevo, load_db()));
+        assert!(
+            hallados.is_empty(),
+            "9.6 no esta en ningun rango: {hallados:?}"
+        );
+
+        let intermedio = port(22, Some("SSH-2.0-OpenSSH_9.3p1"), "SSH");
+        let hallados = cves(&check_port(&intermedio, load_db()));
+        assert!(
+            hallados.contains(&"CVE-2023-38408".to_string()),
+            "{hallados:?}"
+        );
     }
 
     #[test]
-    fn test_smb_port() {
-        let p = port(445, None, "SMB");
-        let findings = check_port(&p, load_db());
-        assert!(findings.iter().any(|f| f.cve == "CVE-2017-0144"));
+    fn smb_needs_the_smb1_negotiation_not_just_the_port() {
+        // 445 abierto negociando SMB2: NO es EternalBlue
+        let moderno = port(445, Some("SMB2/3"), "SMB");
+        assert!(cves(&check_port(&moderno, load_db())).is_empty());
+        // 445 abierto sin poder negociar: tampoco se afirma nada
+        let desconocido = port(445, None, "SMB");
+        assert!(cves(&check_port(&desconocido, load_db())).is_empty());
+        // 445 que acepta SMB1: exposicion real
+        let viejo = port(445, Some("SMB1 habilitado"), "SMB");
+        assert!(cves(&check_port(&viejo, load_db())).contains(&"CVE-2017-0144".to_string()));
     }
 
     #[test]
-    fn rdp_port_flagged_and_http_without_banner_not_flagged() {
+    fn rdp_port_only_is_flagged_as_suspicion() {
         let rdp = port(3389, None, "RDP");
-        assert!(
-            check_port(&rdp, load_db())
-                .iter()
-                .any(|f| f.cve == "CVE-2019-0708")
-        );
-        // Apache/Log4Shell requiere banner: el puerto solo no alcanza
-        let http = port(80, Some("nginx/1.18.0"), "HTTP");
-        assert!(
-            !check_port(&http, load_db())
-                .iter()
-                .any(|f| f.cve == "CVE-2021-44228")
-        );
+        assert!(cves(&check_port(&rdp, load_db())).contains(&"CVE-2019-0708".to_string()));
     }
 
     #[test]
-    fn findings_are_sorted_by_severity() {
+    fn http_requires_the_banner() {
+        let nginx = port(80, Some("nginx/1.18.0"), "HTTP");
+        assert!(cves(&check_port(&nginx, load_db())).is_empty());
+        let vulnerable = port(80, Some("Apache/2.4.49 (Unix)"), "HTTP");
+        assert!(cves(&check_port(&vulnerable, load_db())).contains(&"CVE-2021-44228".to_string()));
+    }
+
+    #[test]
+    fn findings_are_sorted_by_severity_and_deduped() {
         let ports = [
-            port(445, None, "SMB"),
             port(22, Some("SSH-2.0-OpenSSH_7.2p2"), "SSH"),
+            port(445, Some("SMB1 habilitado"), "SMB"),
         ];
         let findings = check_host(&ports);
         assert!(findings.len() >= 2);
         assert_eq!(findings[0].severity, "critica");
+        let unique: HashSet<(String, u16)> =
+            findings.iter().map(|f| (f.cve.clone(), f.port)).collect();
+        assert_eq!(unique.len(), findings.len(), "sin hallazgos repetidos");
     }
 }
