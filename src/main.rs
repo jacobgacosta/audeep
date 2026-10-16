@@ -202,17 +202,17 @@ async fn main() {
                 .iter()
                 .map(|h| (h.ip.clone(), risk::score_host(h)))
                 .collect();
-            ranking.sort_by(|a, b| b.1.score.cmp(&a.1.score));
-            if let Some((ip, top)) = ranking.first() {
-                if top.score > 0 {
-                    println!(
-                        "Mayor riesgo: {} score {} ({}) - {}",
-                        ip,
-                        top.score,
-                        top.level,
-                        top.reasons.join("; ")
-                    );
-                }
+            ranking.sort_by_key(|a| std::cmp::Reverse(a.1.score));
+            if let Some((ip, top)) = ranking.first()
+                && top.score > 0
+            {
+                println!(
+                    "Mayor riesgo: {} score {} ({}) - {}",
+                    ip,
+                    top.score,
+                    top.level,
+                    top.reasons.join("; ")
+                );
             }
             hosts = discovered;
         } else {

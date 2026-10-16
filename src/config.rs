@@ -29,7 +29,8 @@ pub struct AuditConfig {
 }
 
 fn default_timeout() -> u64 {
-    400
+    // Una sola fuente de verdad con el descubrimiento de red.
+    crate::network::PROBE_TIMEOUT_MS
 }
 
 fn default_concurrency() -> usize {

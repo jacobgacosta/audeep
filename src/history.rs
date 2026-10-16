@@ -96,6 +96,8 @@ impl History {
             .ok()
     }
 
+    /// Solo lo usan los tests: en produccion el historial no necesita contarse.
+    #[cfg(test)]
     pub fn scan_count(&self) -> i64 {
         self.conn
             .query_row("SELECT COUNT(*) FROM scans", [], |r| r.get(0))
@@ -231,17 +233,17 @@ impl History {
                 .find(|h| h.ip == gw)
                 .and_then(|h| h.mac.clone());
             let anterior = before.get(&gw).and_then(|d| d.mac.clone());
-            if let (Some(a), Some(b)) = (actual, anterior) {
-                if a != b {
-                    events.push(Event {
-                        kind: "gateway_cambio".to_string(),
-                        ip: gw,
-                        mac: Some(a),
-                        detail: format!(
-                            "la MAC del gateway cambio de {b} a un valor nuevo: posible MitM"
-                        ),
-                    });
-                }
+            if let (Some(a), Some(b)) = (actual, anterior)
+                && a != b
+            {
+                events.push(Event {
+                    kind: "gateway_cambio".to_string(),
+                    ip: gw,
+                    mac: Some(a),
+                    detail: format!(
+                        "la MAC del gateway cambio de {b} a un valor nuevo: posible MitM"
+                    ),
+                });
             }
         }
 
@@ -323,7 +325,7 @@ mod tests {
             vendor_source: None,
             is_alive: true,
             open_ports: ports
-                .into_iter()
+                .iter()
                 .map(|p| PortResult {
                     port: *p,
                     state: "open".to_string(),

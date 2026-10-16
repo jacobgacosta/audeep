@@ -28,6 +28,13 @@ pub struct NetworkSummary {
     pub critical_hosts: usize,
 }
 
+/// (vendors ordenados, puertos top, conteo por severidad)
+type Graficos = (
+    Vec<String>,
+    Vec<(String, usize)>,
+    (usize, usize, usize, usize),
+);
+
 impl AuditReport {
     pub fn new(
         hardware: HardwareReport,
@@ -382,20 +389,14 @@ apply();
                     "<tr><td>{}</td><td>{}</td><td>{}</td></tr>",
                     escape(&n.name),
                     escape(&n.mac),
-                    escape(&n.ips.join(", "))
+                    escape(n.ips.join(", "))
                 )
             })
             .collect()
     }
 
     /// (vendors ordenados, puertos top, conteo por severidad)
-    fn graficos(
-        &self,
-    ) -> (
-        Vec<String>,
-        Vec<(String, usize)>,
-        (usize, usize, usize, usize),
-    ) {
+    fn graficos(&self) -> Graficos {
         let mut vendors: HashMap<String, usize> = HashMap::new();
         let mut puertos: HashMap<String, usize> = HashMap::new();
         let mut sev = HashMap::new();
@@ -502,7 +503,7 @@ fn fila_host(h: &HostInfo, r: &risk::RiskScore) -> String {
     let extra = {
         let mut partes: Vec<String> = Vec::new();
         if !h.mdns_names.is_empty() {
-            partes.push(format!("mDNS: {}", escape(&h.mdns_names.join(", "))));
+            partes.push(format!("mDNS: {}", escape(h.mdns_names.join(", "))));
         }
         if let Some(s) = h.ssdp_location.as_deref() {
             partes.push(format!("SSDP: {}", escape(trunc(s, 60))));
@@ -554,7 +555,7 @@ fn fila_host(h: &HostInfo, r: &risk::RiskScore) -> String {
         "<tr data-ip='{ip}' data-sev='{sev}' data-vendor='{ven}' data-risk='{risk}'><td>{ip}</td><td>{host}</td><td>{mac}</td><td>{vendor}{fuente}</td><td class='risk {rclase}'>{score} {level}{motivos}</td><td>{puertos}</td><td>{hallazgos}</td><td>{extra}</td></tr>",
         ip = escape(&h.ip),
         sev = sev,
-        ven = escape(&vendor.to_lowercase()),
+        ven = escape(vendor.to_lowercase()),
         risk = risk_key,
         host = escape(h.hostname.as_deref().unwrap_or("—")),
         mac = escape(h.mac.as_deref().unwrap_or("—")),
@@ -597,7 +598,7 @@ mod tests {
             vendor_source: Some("oui".to_string()),
             is_alive: true,
             open_ports: ports
-                .into_iter()
+                .iter()
                 .map(|p| PortResult {
                     port: *p,
                     state: "open".to_string(),

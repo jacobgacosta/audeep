@@ -106,12 +106,12 @@ fn entries_from_sqlite_file(path: &Path) -> Option<Vec<VulnEntry>> {
 
 /// CVEs extra que aporta la base SQLite (junto al binario, en cwd o embebida).
 fn extra_from_sqlite() -> Vec<VulnEntry> {
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            for cand in [dir.join("cve.db"), dir.join("assets/cve.db")] {
-                if let Some(v) = entries_from_sqlite_file(&cand) {
-                    return v;
-                }
+    if let Ok(exe) = std::env::current_exe()
+        && let Some(dir) = exe.parent()
+    {
+        for cand in [dir.join("cve.db"), dir.join("assets/cve.db")] {
+            if let Some(v) = entries_from_sqlite_file(&cand) {
+                return v;
             }
         }
     }

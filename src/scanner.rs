@@ -190,10 +190,10 @@ pub async fn scan_target(ip: IpAddr, ports: &[u16], timeout_ms: u64) -> Vec<Port
 
     let mut opens = Vec::new();
     for t in tasks {
-        if let Ok(res) = t.await {
-            if res.state == "open" {
-                opens.push(res);
-            }
+        if let Ok(res) = t.await
+            && res.state == "open"
+        {
+            opens.push(res);
         }
     }
     opens.sort_by_key(|r| r.port);
@@ -248,10 +248,7 @@ mod tests {
             std::io::ErrorKind::TimedOut,
             "timeout"
         )));
-        assert!(!is_refused(&std::io::Error::new(
-            std::io::ErrorKind::Other,
-            "otro"
-        )));
+        assert!(!is_refused(&std::io::Error::other("otro")));
     }
 
     #[cfg(target_os = "windows")]

@@ -93,13 +93,13 @@ fn oui_prefix(mac: &str) -> Option<String> {
 /// Si el bit `0x02` está prendido la MAC es aleatoria/local, así que el registro
 /// OUI **no** identifica al fabricante real: se dice eso en vez de inventar marca.
 pub fn lookup_vendor_guess(mac: &str) -> Option<VendorGuess> {
-    if let Some(prefix) = oui_prefix(mac) {
-        if let Some(v) = oui_curated().get(&prefix) {
-            return Some(VendorGuess {
-                name: v.clone(),
-                source: "oui",
-            });
-        }
+    if let Some(prefix) = oui_prefix(mac)
+        && let Some(v) = oui_curated().get(&prefix)
+    {
+        return Some(VendorGuess {
+            name: v.clone(),
+            source: "oui",
+        });
     }
     if is_locally_administered(&mac.to_lowercase().replace('-', ":")) {
         return Some(VendorGuess {
@@ -107,13 +107,13 @@ pub fn lookup_vendor_guess(mac: &str) -> Option<VendorGuess> {
             source: "oui-local",
         });
     }
-    if let Some(prefix) = oui_prefix(mac) {
-        if let Some(v) = oui_registry().get(&prefix) {
-            return Some(VendorGuess {
-                name: v.clone(),
-                source: "oui",
-            });
-        }
+    if let Some(prefix) = oui_prefix(mac)
+        && let Some(v) = oui_registry().get(&prefix)
+    {
+        return Some(VendorGuess {
+            name: v.clone(),
+            source: "oui",
+        });
     }
     None
 }
@@ -385,10 +385,10 @@ pub fn local_net() -> Option<LocalNet> {
     if candidates.is_empty() {
         return None;
     }
-    if let Some(p) = preferred {
-        if let Some(found) = candidates.iter().find(|c| c.ip == p) {
-            return Some(found.clone());
-        }
+    if let Some(p) = preferred
+        && let Some(found) = candidates.iter().find(|c| c.ip == p)
+    {
+        return Some(found.clone());
     }
     if let Some(private) = candidates
         .iter()
@@ -604,20 +604,20 @@ pub async fn enrich_with_arp(mut hosts: Vec<HostInfo>) -> Vec<HostInfo> {
     let net = local_net();
 
     for h in &mut hosts {
-        if h.mac.is_none() {
-            if let Some(mac) = arp.get(&h.ip) {
-                h.mac = Some(mac.clone());
-                if let Some(guess) = lookup_vendor_guess(mac) {
-                    h.vendor = Some(guess.name);
-                    h.vendor_source = Some(guess.source.to_string());
-                }
+        if h.mac.is_none()
+            && let Some(mac) = arp.get(&h.ip)
+        {
+            h.mac = Some(mac.clone());
+            if let Some(guess) = lookup_vendor_guess(mac) {
+                h.vendor = Some(guess.name);
+                h.vendor_source = Some(guess.source.to_string());
             }
         }
         // Intentar resolver hostname si aún no tiene (con timeout corto)
-        if h.hostname.is_none() {
-            if let Ok(ip) = h.ip.parse::<IpAddr>() {
-                h.hostname = try_resolve_hostname(ip).await;
-            }
+        if h.hostname.is_none()
+            && let Ok(ip) = h.ip.parse::<IpAddr>()
+        {
+            h.hostname = try_resolve_hostname(ip).await;
         }
     }
 
@@ -704,12 +704,11 @@ pub async fn discover_mdns_map(timeout_ms: u64) -> HashMap<String, Vec<String>> 
                             map.entry(ip_str).or_default().push(hostname.clone());
                             // también mapear fullname
                             let fullname = info.get_fullname().trim_end_matches('.').to_string();
-                            if fullname != hostname {
-                                if let Some(v) = map.get_mut(&addr.to_string()) {
-                                    if !v.contains(&fullname) {
-                                        v.push(fullname.clone());
-                                    }
-                                }
+                            if fullname != hostname
+                                && let Some(v) = map.get_mut(&addr.to_string())
+                                && !v.contains(&fullname)
+                            {
+                                v.push(fullname.clone());
                             }
                         }
                     }
@@ -802,11 +801,10 @@ pub async fn enrich_with_mdns_ssdp(mut hosts: Vec<HostInfo>, timeout_ms: u64) ->
                 .open_ports
                 .iter()
                 .any(|p| p.port == 80 || p.port == 8080 || p.port == 8000)
+                && let Some(guess) = http_infer_vendor(&h.ip).await
             {
-                if let Some(guess) = http_infer_vendor(&h.ip).await {
-                    h.vendor = Some(guess.name);
-                    h.vendor_source = Some(guess.source.to_string());
-                }
+                h.vendor = Some(guess.name);
+                h.vendor_source = Some(guess.source.to_string());
             }
         }
     }
