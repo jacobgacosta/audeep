@@ -36,10 +36,18 @@ struct Args {
     #[arg(long, value_name = "PATH")]
     html: Option<PathBuf>,
 
-    /// Modo servidor: expone / (HTML), /json, /health en ADDR (default 0.0.0.0:8766, evita Koupper 8080)
-    /// Uso: --serve, --serve 192.168.4.1:80, --serve=192.168.4.1:80
-    #[arg(long, value_name="ADDR", num_args=0..=1, default_missing_value="0.0.0.0:8766")]
+    /// Modo servidor: expone / (HTML), /json, /health, /scan en ADDR.
+    /// Por defecto escucha solo en loopback; para el modo AP usa --serve 0.0.0.0:80
+    #[arg(long, value_name = "ADDR", num_args = 0..=1, default_missing_value = "127.0.0.1:8766")]
     serve: Option<String>,
+
+    /// Segundos de validez del reporte cacheado en --serve (default 60)
+    #[arg(long, value_name = "SECS", default_value_t = 60)]
+    serve_interval: u64,
+
+    /// Token obligatorio para consultar --serve (query ?token= o cabecera X-Auth-Token)
+    #[arg(long, value_name = "TOKEN")]
+    serve_token: Option<String>,
 }
 
 #[tokio::main]
@@ -47,7 +55,12 @@ async fn main() {
     let args = Args::parse();
 
     if let Some(addr) = args.serve {
-        if let Err(e) = serve::serve(&addr).await {
+        let opts = serve::ServeOptions {
+            interval_secs: args.serve_interval,
+            token: args.serve_token.clone(),
+            ..Default::default()
+        };
+        if let Err(e) = serve::serve(&addr, opts).await {
             eprintln!("Error serve: {}", e);
         }
         return;
