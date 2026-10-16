@@ -3,6 +3,7 @@ mod hardware;
 mod network;
 mod probe;
 mod report;
+mod risk;
 mod scanner;
 mod serve;
 mod vuln;
@@ -135,6 +136,23 @@ async fn main() {
                     mdns_str,
                     ssdp_str
                 );
+            }
+            // Ranking de riesgo: lo primero que hay que mirar de una red.
+            let mut ranking: Vec<_> = discovered
+                .iter()
+                .map(|h| (h.ip.clone(), risk::score_host(h)))
+                .collect();
+            ranking.sort_by(|a, b| b.1.score.cmp(&a.1.score));
+            if let Some((ip, top)) = ranking.first() {
+                if top.score > 0 {
+                    println!(
+                        "Mayor riesgo: {} score {} ({}) - {}",
+                        ip,
+                        top.score,
+                        top.level,
+                        top.reasons.join("; ")
+                    );
+                }
             }
             hosts = discovered;
         } else {
