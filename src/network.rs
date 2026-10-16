@@ -372,47 +372,11 @@ pub async fn discover_hosts(timeout_ms: u64, max_concurrency: usize) -> Vec<Host
     alive_hosts
 }
 
-// Helper para resolver MAC via tabla ARP (solo lectura, sin raw sockets)
-// En Windows: `arp -a`, en Linux: `/proc/net/arp`
-pub fn arp_table_snapshot() -> HashMap<String, String> {
-    let mut map = HashMap::new();
-    #[cfg(target_os = "windows")]
-    {
-        if let Ok(output) = std::process::Command::new("arp").arg("-a").output() {
-            let text = String::from_utf8_lossy(&output.stdout);
-            for line in text.lines() {
-                // Formato típico:  192.168.1.1           00-11-22-33-44-55     dinámico
-                let parts: Vec<&str> = line.split_whitespace().collect();
-                if parts.len() >= 2 {
-                    let ip = parts[0];
-                    let mac = parts[1];
-                    if ip.parse::<IpAddr>().is_ok() && mac.contains('-') || mac.contains(':') {
-                        map.insert(ip.to_string(), mac.to_string());
-                    }
-                }
-            }
-        }
-    }
-    #[cfg(not(target_os = "windows"))]
-    {
-        if let Ok(content) = std::fs::read_to_string("/proc/net/arp") {
-            for line in content.lines().skip(1) {
-                let parts: Vec<&str> = line.split_whitespace().collect();
-                if parts.len() >= 4 {
-                    let ip = parts[0];
-                    let mac = parts[3];
-                    if mac != "00:00:00:00:00:00" {
-                        map.insert(ip.to_string(), mac.to_string());
-                    }
-                }
-            }
-        }
-    }
-    map
-}
+// La lectura y el parseo de la tabla ARP viven en `crate::arp` (multi-formato,
+// validado y con tests de los formatos de Windows y de /proc/net/arp).
 
 pub async fn enrich_with_arp(mut hosts: Vec<HostInfo>) -> Vec<HostInfo> {
-    let arp = arp_table_snapshot();
+    let arp = crate::arp::arp_table_snapshot();
     for h in &mut hosts {
         if let Some(mac) = arp.get(&h.ip) {
             h.mac = Some(mac.clone());
