@@ -1,5 +1,6 @@
 mod arp;
 mod hardware;
+mod history;
 mod network;
 mod probe;
 mod report;
@@ -18,6 +19,14 @@ struct Args {
     /// No escanear red, solo hardware local
     #[arg(long)]
     no_scan: bool,
+
+    /// Historial SQLite para comparar contra el escaneo anterior
+    #[arg(long, value_name = "PATH", default_value = "audeep_history.db")]
+    history: PathBuf,
+
+    /// No guardar ni comparar historial
+    #[arg(long)]
+    no_history: bool,
 
     /// Ruta JSON de salida (ej. --json=out.json)
     #[arg(long, value_name = "PATH")]
@@ -181,7 +190,25 @@ async fn main() {
         println!("--no-scan activo: se omite descubrimiento de red.");
     }
 
-    let audit = report::AuditReport::new(hw, hosts, subnet, duration_secs);
+    // Historial: guarda este escaneo y saca la diferencia contra el anterior.
+    let mut events = Vec::new();
+    if do_scan && !args.no_history {
+        match history::History::open(&args.history) {
+            Ok(hist) => {
+                let previous = hist.last_scan_id();
+                events = hist.diff_and_record(previous, &hosts, subnet.as_deref(), duration_secs);
+                if !events.is_empty() {
+                    println!("\nCambios desde el escaneo anterior:");
+                    for e in &events {
+                        println!("  - [{}] {} {}", e.kind, e.ip, e.detail);
+                    }
+                }
+            }
+            Err(e) => eprintln!("Historial no disponible: {e}"),
+        }
+    }
+
+    let audit = report::AuditReport::new(hw, hosts, subnet, duration_secs).with_events(events);
 
     // Salida JSON a stdout (siempre)
     match audit.to_json_pretty() {

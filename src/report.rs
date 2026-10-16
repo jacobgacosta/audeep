@@ -1,4 +1,5 @@
 use crate::hardware::HardwareReport;
+use crate::history::Event;
 use crate::network::HostInfo;
 use chrono::{DateTime, Utc};
 use serde::Serialize;
@@ -12,6 +13,8 @@ pub struct AuditReport {
     pub hardware: HardwareReport,
     pub network: NetworkSummary,
     pub hosts: Vec<HostInfo>,
+    /// Cambios y anomalias contra el escaneo anterior (vacio si no hay historial).
+    pub events: Vec<Event>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -41,7 +44,14 @@ impl AuditReport {
                 total_vulnerabilities: total_vulns,
             },
             hosts,
+            events: Vec::new(),
         }
+    }
+
+    /// Adjunta los eventos del historial (diff contra el escaneo anterior).
+    pub fn with_events(mut self, events: Vec<Event>) -> Self {
+        self.events = events;
+        self
     }
 
     pub fn to_json_pretty(&self) -> Result<String, serde_json::Error> {
