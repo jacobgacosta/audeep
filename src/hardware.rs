@@ -1,5 +1,6 @@
 use chrono::{DateTime, Utc};
 use serde::Serialize;
+use std::collections::HashMap;
 use sysinfo::{Components, Disks, Networks, System};
 
 #[derive(Debug, Clone, Serialize)]
@@ -34,6 +35,7 @@ pub struct DiskInfo {
 pub struct NetInterface {
     pub name: String,
     pub mac: String,
+    /// IPs de la interfaz. `sysinfo` no las expone, se completan con `if-addrs`.
     pub ips: Vec<String>,
 }
 
@@ -66,6 +68,24 @@ pub struct HardwareReport {
 fn bytes_to_gb(bytes: u64) -> f64 {
     // 1 GB = 1024^3
     (bytes as f64) / (1024.0 * 1024.0 * 1024.0)
+}
+
+/// IPs por interfaz. `sysinfo 0.30` solo da MAC, así que las direcciones se
+/// leen de `if-addrs` y se asocian por nombre de interfaz.
+fn interface_ips() -> HashMap<String, Vec<String>> {
+    let mut map: HashMap<String, Vec<String>> = HashMap::new();
+    if let Ok(list) = if_addrs::get_if_addrs() {
+        for iface in list {
+            let name = iface.name.clone();
+            if let if_addrs::IfAddr::V4(v4) = iface.addr {
+                if v4.ip.is_unspecified() {
+                    continue;
+                }
+                map.entry(name).or_default().push(v4.ip.to_string());
+            }
+        }
+    }
+    map
 }
 
 pub fn collect_hardware_info() -> HardwareReport {
@@ -106,17 +126,28 @@ pub fn collect_hardware_info() -> HardwareReport {
     // Disks - sysinfo 0.30 uses Disks struct
     let disks = Disks::new_with_refreshed_list()
         .iter()
-        .map(|d| DiskInfo {
-            name: d.name().to_string_lossy().to_string(),
-            mount_point: d.mount_point().to_string_lossy().to_string(),
-            file_system: d.file_system().to_string_lossy().to_string(),
-            total_gb: bytes_to_gb(d.total_space()),
-            available_gb: bytes_to_gb(d.available_space()),
-            is_removable: d.is_removable(),
+        .map(|d| {
+            let raw_name = d.name().to_string_lossy().to_string();
+            let mount_point = d.mount_point().to_string_lossy().to_string();
+            // En Windows el nombre del volumen suele venir vacío: usar el punto de montaje.
+            let name = if raw_name.trim().is_empty() {
+                mount_point.clone()
+            } else {
+                raw_name
+            };
+            DiskInfo {
+                name,
+                mount_point,
+                file_system: d.file_system().to_string_lossy().to_string(),
+                total_gb: bytes_to_gb(d.total_space()),
+                available_gb: bytes_to_gb(d.available_space()),
+                is_removable: d.is_removable(),
+            }
         })
         .collect();
 
     // Network interfaces - sysinfo 0.30 only exposes MAC + traffic, no IP
+    let ips_by_iface = interface_ips();
     let networks = Networks::new_with_refreshed_list();
     let network_interfaces = networks
         .iter()
@@ -125,7 +156,7 @@ pub fn collect_hardware_info() -> HardwareReport {
             NetInterface {
                 name: name.clone(),
                 mac,
-                ips: Vec::new(),
+                ips: ips_by_iface.get(name).cloned().unwrap_or_default(),
             }
         })
         .collect();
@@ -157,5 +188,31 @@ pub fn collect_hardware_info() -> HardwareReport {
         disks,
         network_interfaces,
         sensors,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn gb_conversion_uses_1024_base() {
+        assert!((bytes_to_gb(1024 * 1024 * 1024) - 1.0).abs() < 1e-9);
+        assert!((bytes_to_gb(0) - 0.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn hardware_report_is_populated() {
+        let hw = collect_hardware_info();
+        assert!(hw.cpu.cores_logical >= 1);
+        assert!(hw.memory.total_bytes > 0);
+        assert!(!hw.hostname.is_empty());
+        // Los discos deben tener nombre no vacío (antes quedaba "" en Windows).
+        for d in &hw.disks {
+            assert!(
+                !d.name.trim().is_empty(),
+                "disco sin nombre ni punto de montaje"
+            );
+        }
     }
 }

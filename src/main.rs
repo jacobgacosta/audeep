@@ -74,7 +74,7 @@ async fn main() {
                 "Escaneando red local (puede tardar 20-60s, timeout 400ms, 64 tareas paralelas)..."
             );
             let start = Instant::now();
-            let mut discovered = network::discover_hosts(400, 64).await;
+            let mut discovered = network::discover_hosts(network::PROBE_TIMEOUT_MS, 64).await;
             discovered = network::enrich_with_arp(discovered).await;
             discovered = network::enrich_with_mdns_ssdp(discovered, 1200).await;
             duration_secs = start.elapsed().as_secs_f64();
@@ -149,6 +149,7 @@ async fn main() {
                 hostname: Some(hw.hostname.clone()),
                 mac: None,
                 vendor: None,
+                vendor_source: None,
                 is_alive: true,
                 open_ports: open,
                 latency_ms: Some(0),

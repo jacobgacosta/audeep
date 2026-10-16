@@ -87,6 +87,7 @@ dependencies = [
  "clap",
  "dns-lookup",
  "hostname",
+ "if-addrs",
  "mdns-sd",
  "reqwest",
  "rusqlite",
