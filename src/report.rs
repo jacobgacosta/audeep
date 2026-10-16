@@ -1,6 +1,7 @@
 use crate::hardware::HardwareReport;
 use crate::history::Event;
 use crate::network::HostInfo;
+use crate::risk;
 use chrono::{DateTime, Utc};
 use serde::Serialize;
 use std::collections::HashMap;
@@ -23,6 +24,8 @@ pub struct NetworkSummary {
     pub total_hosts_alive: usize,
     pub scan_duration_secs: f64,
     pub total_vulnerabilities: usize,
+    /// Hosts con score de riesgo critico.
+    pub critical_hosts: usize,
 }
 
 impl AuditReport {
@@ -34,6 +37,10 @@ impl AuditReport {
     ) -> Self {
         let total = hosts.len();
         let total_vulns = hosts.iter().map(|h| h.vulnerabilities.len()).sum();
+        let critical_hosts = hosts
+            .iter()
+            .filter(|h| risk::score_host(h).level == "critico")
+            .count();
         Self {
             generated_at: Utc::now(),
             hardware,
@@ -42,6 +49,7 @@ impl AuditReport {
                 total_hosts_alive: total,
                 scan_duration_secs: duration_secs,
                 total_vulnerabilities: total_vulns,
+                critical_hosts,
             },
             hosts,
             events: Vec::new(),
@@ -63,414 +71,645 @@ impl AuditReport {
         fs::write(path, json)
     }
 
+    pub fn save_html(&self, path: &Path) -> std::io::Result<()> {
+        fs::write(path, self.to_html())
+    }
+
     pub fn to_html(&self) -> String {
-        let hosts_rows = self.hosts.iter().map(|h| {
-            let ports = if h.open_ports.is_empty() {
-                "<span class='muted'>ninguno (o filtrado)</span>".to_string()
-            } else {
-                h.open_ports.iter().map(|p| {
-                    let banner = p.banner.as_ref().map(|b| format!("<br><small>{}</small>", html_escape(b))).unwrap_or_default();
-                    let svc = p.service_hint.as_ref().map(|s| format!(" ({})", s)).unwrap_or_default();
-                    format!("<span class='tag'>{}{} {}{}</span>", p.port, svc, p.state, banner)
-                }).collect::<Vec<_>>().join(" ")
-            };
-            let vulns = if h.vulnerabilities.is_empty() {
-                "<span class='muted' style='font-family:ui-monospace,monospace; font-size:11px'>— 0 hallazgos</span>".to_string()
-            } else {
-                h.vulnerabilities.iter().map(|v| {
-                    let (border, sevClass) = match v.severity.as_str() {
-                        "critica" => ("#dc2626", "bCrit"),
-                        "alta" => ("#d97706", "bAlta"),
-                        "media" => ("#ca8a04", "bMedia"),
-                        _ => ("#16a34a", "bBaja"),
-                    };
-                    format!(
-                        "<span style=\"display:inline-block; margin:2px; padding:4px 8px; background:#fff; border:1px solid #e7e5e4; border-left:3px solid {}; border-radius:6px; font-family:ui-monospace,monospace; font-size:11px; line-height:1.3\"><b style=\"letter-spacing:0.3px\">{}</b> <span class=\"badge {}\">{}</span> :{}<br><small style=\"color:#57534e; font-family:ui-sans-serif,system-ui; font-size:11px\">{}</small></span>",
-                        border,
-                        html_escape(&v.cve),
-                        sevClass,
-                        html_escape(&v.severity),
-                        v.port,
-                        html_escape(&v.description)
-                    )
-                }).collect::<Vec<_>>().join(" ")
-            };
-            let vendor = h.vendor.clone().unwrap_or_else(|| "—".to_string());
-            let mac = h.mac.clone().unwrap_or_else(|| "—".to_string());
-            let latency = h.latency_ms.map(|v| format!("{} ms", v)).unwrap_or_else(|| "—".to_string());
-            let mdns = if h.mdns_names.is_empty() { "—".to_string() } else { h.mdns_names.iter().map(|n| html_escape(n)).collect::<Vec<_>>().join("<br>") };
-            let ssdp = h.ssdp_location.clone().map(|s| html_escape(&s)).unwrap_or_else(|| "—".to_string());
-            // data attributes for JS filtering
-            let sev = h.vulnerabilities.iter().map(|v| v.severity.clone()).collect::<Vec<_>>().join(",");
-            format!(
-                "<tr data-ip='{}' data-hostname='{}' data-vendor='{}' data-sev='{}'><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>",
-                html_escape(&h.ip.to_lowercase()),
-                html_escape(&h.hostname.clone().unwrap_or_default().to_lowercase()),
-                html_escape(&vendor.to_lowercase()),
-                sev,
-                html_escape(&h.ip),
-                html_escape(&h.hostname.clone().unwrap_or_else(|| "—".to_string())),
-                html_escape(&mac),
-                html_escape(&vendor),
-                latency,
-                ports,
-                vulns,
-                mdns,
-                ssdp
-            )
-        }).collect::<Vec<_>>().join("\n");
-
-        let disks_rows = self.hardware.disks.iter().map(|d| {
-            format!(
-                "<tr><td>{}</td><td>{}</td><td>{}</td><td>{:.1} / {:.1} GB</td><td>{}</td></tr>",
-                html_escape(&d.name),
-                html_escape(&d.mount_point),
-                html_escape(&d.file_system),
-                d.available_gb,
-                d.total_gb,
-                if d.is_removable { "extraíble" } else { "fijo" }
-            )
-        }).collect::<Vec<_>>().join("\n");
-
-        let net_ifaces = self
-            .hardware
-            .network_interfaces
+        let mut ordenados: Vec<(&HostInfo, risk::RiskScore)> = self
+            .hosts
             .iter()
-            .map(|n| {
-                format!(
-                    "<tr><td>{}</td><td>{}</td></tr>",
-                    html_escape(&n.name),
-                    html_escape(&n.mac)
-                )
-            })
-            .collect::<Vec<_>>()
-            .join("\n");
+            .map(|h| (h, risk::score_host(h)))
+            .collect();
+        ordenados.sort_by(|a, b| b.1.score.cmp(&a.1.score).then(a.0.ip.cmp(&b.0.ip)));
 
-        let sensors_rows = if self.hardware.sensors.is_empty() {
-            "<tr><td colspan='4' class='muted'>No se detectaron sensores (normal en Windows/VM)</td></tr>".to_string()
-        } else {
-            self.hardware
-                .sensors
-                .iter()
-                .map(|s| {
-                    let crit = s
-                        .critical_c
-                        .map(|c| format!("{:.1}°C", c))
-                        .unwrap_or_else(|| "—".to_string());
-                    format!(
-                        "<tr><td>{}</td><td>{:.1}°C</td><td>{:.1}°C</td><td>{}</td></tr>",
-                        html_escape(&s.label),
-                        s.temperature_c,
-                        s.max_c,
-                        html_escape(&crit)
-                    )
-                })
-                .collect::<Vec<_>>()
-                .join("\n")
-        };
-
+        let filas: String = ordenados.iter().map(|(h, r)| fila_host(h, r)).collect();
+        let eventos = self.eventos_html();
         let subnet = self
             .network
             .local_subnet
             .clone()
             .unwrap_or_else(|| "no detectada".to_string());
-        let oui_count: usize = serde_json::from_str::<std::collections::HashMap<String, String>>(
-            include_str!("../assets/oui_full.json"),
-        )
-        .map(|m| m.len())
-        .unwrap_or_else(|_| {
-            serde_json::from_str::<std::collections::HashMap<String, String>>(include_str!(
-                "../assets/oui.json"
-            ))
-            .map(|m| m.len())
-            .unwrap_or(0)
-        });
         let cve_count = crate::vuln::load_db().len();
+        let oui_count = crate::network::oui_count();
+        let puertos = crate::scanner::active_ports()
+            .iter()
+            .map(|p| p.to_string())
+            .collect::<Vec<_>>()
+            .join(", ");
 
-        // Chart data computed in Rust for JS
-        let mut vendor_counts: HashMap<String, usize> = HashMap::new();
-        let mut port_counts: HashMap<String, usize> = HashMap::new();
-        let mut sev_counts: HashMap<String, usize> = HashMap::new();
+        let data_json = serde_json::to_string(&self.hosts).unwrap_or_else(|_| "[]".to_string());
+        let jsonl = self
+            .hosts
+            .iter()
+            .filter_map(|h| serde_json::to_string(h).ok())
+            .collect::<Vec<_>>()
+            .join("\n");
+        let (vendors, puertos_top, sev) = self.graficos();
+        let hw = &self.hardware;
+
+        let mut s = String::with_capacity(96 * 1024);
+        s.push_str(&format!(
+            r##"<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>AuDeep — Reporte de auditoría</title>
+<style>
+:root{{--bg:#fdfbf7;--fg:#1c1917;--muted:#78716c;--card:#fff;--border:#e7e5e4;--accent:#0ea5e9;--crit:#dc2626;--alta:#d97706;--media:#ca8a04;--baja:#16a34a}}
+*{{box-sizing:border-box}} body{{margin:0;font-family:ui-sans-serif,system-ui,Segoe UI,Roboto,sans-serif;background:var(--bg);color:var(--fg)}}
+header{{padding:22px 20px 14px;border-bottom:1px solid var(--border);position:sticky;top:0;z-index:10;backdrop-filter:blur(8px);background:rgba(253,251,247,.93)}}
+h1{{margin:0;font-size:21px;font-weight:800;font-family:ui-monospace,monospace}} .sub{{color:var(--muted);font-size:12px;margin-top:4px;font-family:ui-monospace,monospace}}
+.wrap{{max-width:1280px;margin:0 auto;padding:18px}}
+.card{{background:var(--card);border:1px solid var(--border);border-radius:16px;padding:16px;margin-bottom:16px;box-shadow:0 1px 3px rgba(0,0,0,.05)}}
+.card h2{{margin:0 0 10px;font-size:12px;letter-spacing:.8px;text-transform:uppercase;color:var(--muted);font-family:ui-monospace,monospace}}
+.stats{{display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin-bottom:14px}} @media(max-width:900px){{.stats{{grid-template-columns:repeat(2,1fr)}}}}
+.stat{{background:#fff;border:1px solid var(--border);border-radius:14px;padding:12px;text-align:center}} .stat .num{{font-size:24px;font-weight:800;font-family:ui-monospace,monospace}} .stat .lbl{{color:var(--muted);font-size:10px;text-transform:uppercase;letter-spacing:.6px}}
+.grid{{display:grid;gap:10px;grid-template-columns:repeat(auto-fit,minmax(190px,1fr))}}
+.kv{{background:#fff;border:1px solid var(--border);border-radius:12px;padding:12px}} .kv .k{{color:var(--muted);font-size:10px;text-transform:uppercase}} .kv .v{{font-weight:700;margin-top:4px}} .kv .v small{{font-weight:400;color:var(--muted);font-size:11px;font-family:ui-monospace,monospace}}
+table{{width:100%;border-collapse:collapse;font-size:12px}} th,td{{text-align:left;padding:8px;border-bottom:1px solid var(--border);vertical-align:top;font-family:ui-monospace,monospace;font-size:11px}} th{{color:var(--muted);font-size:10px;text-transform:uppercase;letter-spacing:.6px;background:#fffbeb}}
+.tag{{display:inline-block;background:#fff;border:1px solid var(--border);border-radius:6px;padding:2px 6px;margin:2px 2px 0 0;font-size:11px}}
+.muted{{color:var(--muted)}} .badge{{display:inline-block;padding:2px 7px;border-radius:999px;font-size:10px;font-weight:700;border:1px solid transparent}}
+.bCrit{{background:#fef2f2;color:#991b1b;border-color:#fecaca}} .bAlta{{background:#fffbeb;color:#92400e;border-color:#fde68a}} .bMedia{{background:#fefce8;color:#854d0e;border-color:#fde047}} .bBaja{{background:#f0fdf4;color:#166534;border-color:#bbf7d0}}
+.bConf{{background:#ecfdf5;color:#065f46;border-color:#a7f3d0}} .bProb{{background:#eff6ff;color:#1e40af;border-color:#bfdbfe}} .bSosp{{background:#f8fafc;color:#475569;border-color:#e2e8f0}}
+.risk{{font-weight:800;font-family:ui-monospace,monospace}} .rCrit{{color:#b91c1c}} .rAlto{{color:#c2410c}} .rMedio{{color:#a16207}} .rBajo{{color:#15803d}}
+.controls{{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px}} .controls input,.controls select{{flex:1;min-width:150px;padding:8px 10px;border-radius:8px;border:1px solid var(--border);background:#fff;font-family:ui-monospace,monospace;font-size:12px}}
+.btn{{padding:8px 12px;border-radius:8px;border:1px solid var(--border);background:#1c1917;color:#fdfbf7;cursor:pointer;font-weight:600;font-family:ui-monospace,monospace;font-size:12px}}
+.charts{{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:16px}} @media(max-width:900px){{.charts{{grid-template-columns:1fr}}}}
+.chartBox{{background:#fff;border:1px solid var(--border);border-radius:14px;padding:14px}} .canv{{width:100%;height:auto;display:block}} #cVendor,#cPorts{{aspect-ratio:2/1}} #cSev{{aspect-ratio:1/1;max-width:200px;margin:0 auto}}
+table.ev{{font-size:11px}} .evN{{color:#0369a1;font-weight:700}} .evD{{color:#b91c1c;font-weight:700}} .evP{{color:#a16207;font-weight:700}} .evA{{color:#7c2d12;font-weight:700}}
+footer{{color:var(--muted);font-size:11px;text-align:center;padding:16px;font-family:ui-monospace,monospace}}
+</style>
+</head>
+<body>
+<header>
+  <h1><span style="color:var(--accent)">›_</span> AuDeep <span class="muted">::</span> AUDIT <span style="font-size:12px;background:#1c1917;color:#fdfbf7;padding:2px 6px;border-radius:6px">v0.2</span></h1>
+  <div class="sub">Generado {gen} · Subred {subnet} · Hosts {hosts} · Hallazgos {vulns} · Duración {dur:.1}s · <span id="live" class="muted">offline</span></div>
+</header>
+<div class="wrap">
+  <div class="stats">
+    <div class="stat"><div class="num" style="color:#0284c7">{hosts}</div><div class="lbl">Hosts vivos</div></div>
+    <div class="stat"><div class="num" style="color:#dc2626">{vulns}</div><div class="lbl">Hallazgos</div></div>
+    <div class="stat"><div class="num" style="color:#b91c1c">{criticos}</div><div class="lbl">Hosts críticos</div></div>
+    <div class="stat"><div class="num" style="color:#7c3aed">{nvendors}</div><div class="lbl">Vendors</div></div>
+    <div class="stat"><div class="num" style="color:#16a34a">{npuertos}</div><div class="lbl">Puertos</div></div>
+  </div>
+"##,
+            gen = self.generated_at.format("%Y-%m-%d %H:%M:%S UTC"),
+            subnet = escape(&subnet),
+            hosts = self.hosts.len(),
+            vulns = self.network.total_vulnerabilities,
+            dur = self.network.scan_duration_secs,
+            criticos = self.network.critical_hosts,
+            nvendors = vendors.len(),
+            npuertos = puertos_top.len(),
+        ));
+
+        s.push_str(&eventos);
+
+        s.push_str(&format!(
+            r##"  <div class="card">
+    <h2>// Hardware — {hostname}</h2>
+    <div class="grid">
+      <div class="kv"><div class="k">Sistema</div><div class="v">{os} {osv}<br><small>kernel {kernel} · uptime {uptime}s</small></div></div>
+      <div class="kv"><div class="k">CPU</div><div class="v">{cpu}<br><small>{fis} físicos / {log} lógicos @ {mhz} MHz · {ven}</small></div></div>
+      <div class="kv"><div class="k">Memoria</div><div class="v">{used:.1} / {total:.1} GB<br><small>{avail:.1} GB disponible</small></div></div>
+      <div class="kv"><div class="k">Carga 1/5/15 · Sensores</div><div class="v">{l1:.2} {l5:.2} {l15:.2}<br><small>{nsens} sensores</small></div></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>// Almacenamiento e interfaces</h2>
+    <table><thead><tr><th>Disco</th><th>Punto</th><th>FS</th><th>Libre / Total</th><th>Tipo</th></tr></thead><tbody>{discos}</tbody></table>
+    <table style="margin-top:10px"><thead><tr><th>Interfaz</th><th>MAC</th><th>IPs</th></tr></thead><tbody>{ifaces}</tbody></table>
+  </div>
+
+  <div class="charts">
+    <div class="chartBox"><h3 style="font-size:11px;color:var(--muted)">Vendors top</h3><canvas id="cVendor" class="canv" width="400" height="200"></canvas><div id="leg" class="muted" style="font-size:11px"></div></div>
+    <div class="chartBox"><h3 style="font-size:11px;color:var(--muted)">Severidad</h3><canvas id="cSev" class="canv" width="220" height="220"></canvas><div style="margin-top:8px"><span class="badge bCrit">Crítica {sc}</span> <span class="badge bAlta">Alta {sa}</span> <span class="badge bMedia">Media {sm}</span> <span class="badge bBaja">Baja {sb}</span></div></div>
+    <div class="chartBox"><h3 style="font-size:11px;color:var(--muted)">Puertos top</h3><canvas id="cPorts" class="canv" width="400" height="200"></canvas></div>
+  </div>
+
+  <div class="card" style="border-left:3px solid #dc2626">
+    <h2>// Red — {hosts} vivos · {vulns} hallazgos <span class="muted" style="font-weight:400">· OUI {oui} · reglas {cves} · puertos: {puertos}</span></h2>
+    <p class="muted" style="font-size:11px;font-family:ui-monospace,monospace">Ordenado por riesgo · la columna Riesgo muestra score y motivo · cada hallazgo dice su confianza y con qué se sostiene</p>
+    <div class="controls">
+      <input id="q" placeholder="Buscar IP, hostname, MAC, vendor, mDNS, SSDP, puerto, CVE...">
+      <select id="fRiesgo"><option value="">Todo riesgo</option><option value="critico">Crítico</option><option value="alto">Alto</option><option value="medio">Medio</option><option value="bajo">Bajo</option><option value="sin">Sin riesgo</option></select>
+      <select id="fSev"><option value="">Toda severidad</option><option value="critica">Crítica</option><option value="alta">Alta</option><option value="media">Media</option><option value="baja">Baja</option><option value="sano">Sin hallazgos</option></select>
+      <select id="fVendor"><option value="">Todos los vendors</option></select>
+      <button class="btn" onclick="exportCsv()">⬇ CSV</button>
+      <button class="btn" onclick="exportJsonl()">⬇ JSONL</button>
+      <button class="btn" onclick="window.print()">🖨 Print</button>
+    </div>
+    <div style="overflow:auto;max-height:560px;border:1px solid var(--border);border-radius:12px">
+      <table id="tbl"><thead><tr><th>IP</th><th>Host</th><th>MAC</th><th>Vendor (fuente)</th><th>Riesgo</th><th>Puertos</th><th>Hallazgos</th><th>mDNS / SSDP</th></tr></thead><tbody>{filas}</tbody></table>
+    </div>
+    <p class="muted" style="margin-top:10px;font-size:11px"><span id="cont"></span> · doble click en una fila copia la IP</p>
+  </div>
+</div>
+<footer>AuDeep v0.2 · Rust · offline-first · sin CDN · <span id="ft"></span></footer>
+"##,
+            hostname = escape(&hw.hostname),
+            os = escape(&hw.os_name),
+            osv = escape(&hw.os_version),
+            kernel = escape(&hw.kernel_version),
+            uptime = hw.uptime_secs,
+            cpu = escape(hw.cpu.brand.trim()),
+            fis = hw.cpu.cores_physical.unwrap_or(0),
+            log = hw.cpu.cores_logical,
+            mhz = hw.cpu.frequency_mhz,
+            ven = escape(&hw.cpu.vendor),
+            used = hw.memory.used_gb,
+            total = hw.memory.total_gb,
+            avail = hw.memory.available_gb,
+            l1 = hw.load_avg_one,
+            l5 = hw.load_avg_five,
+            l15 = hw.load_avg_fifteen,
+            nsens = hw.sensors.len(),
+            discos = self.discos_html(),
+            ifaces = self.ifaces_html(),
+            sc = sev.0,
+            sa = sev.1,
+            sm = sev.2,
+            sb = sev.3,
+            hosts = self.hosts.len(),
+            vulns = self.network.total_vulnerabilities,
+            oui = oui_count,
+            cves = cve_count,
+            puertos = escape(&puertos),
+            filas = filas,
+        ));
+
+        s.push_str(&format!(
+            r##"<script>
+const HOSTS={data};
+const JSONL={jsonl_escaped};
+const VENDOR_LABELS="{vl}".split("|").filter(Boolean);
+const VENDOR_VALS="{vv}".split(",").filter(Boolean).map(Number);
+const PORT_LABELS="{pl}".split(",").filter(Boolean);
+const PORT_VALS="{pv}".split(",").filter(Boolean).map(Number);
+const SEV=[{sc},{sa},{sm},{sb}];
+function bar(id,labels,vals,color){{
+  const c=document.getElementById(id); if(!c)return; const x=c.getContext('2d'),W=c.width,H=c.height,pad=28;
+  x.clearRect(0,0,W,H); if(!vals.length){{x.fillStyle="#78716c";x.font="12px ui-monospace";x.fillText("sin datos",10,H/2);return;}}
+  const max=Math.max(...vals,1),bw=(W-pad*2)/vals.length*.62,gap=(W-pad*2)/vals.length*.38;
+  labels.forEach((lb,i)=>{{const bx=pad+i*(bw+gap)+gap/2,h=(vals[i]/max)*(H-pad*2-14),y=H-pad-h;
+    const g=x.createLinearGradient(bx,y,bx,y+h);g.addColorStop(0,color);g.addColorStop(1,"#fdfbf7");
+    x.fillStyle=g;x.beginPath();if(x.roundRect)x.roundRect(bx,y,bw,h,6);else x.rect(bx,y,bw,h);x.fill();
+    x.fillStyle="#1c1917";x.font="10px ui-monospace";x.textAlign="center";x.fillText(String(vals[i]),bx+bw/2,y-4);
+    x.fillStyle="#57534e";x.fillText(lb.length>14?lb.slice(0,13)+"…":lb,bx+bw/2,H-6);}});
+}}
+function pie(id,vals,colors){{
+  const c=document.getElementById(id); if(!c)return; const x=c.getContext('2d'),W=c.width,H=c.height,cx=W/2,cy=H/2,r=Math.min(W,H)/2-14;
+  x.clearRect(0,0,W,H); const t=vals.reduce((a,b)=>a+b,0);
+  if(!t){{x.fillStyle="#78716c";x.font="12px ui-monospace";x.textAlign="center";x.fillText("0 hallazgos",cx,cy);return;}}
+  let a=-Math.PI/2; vals.forEach((v,i)=>{{const s=v/t*Math.PI*2;x.beginPath();x.moveTo(cx,cy);x.arc(cx,cy,r,a,a+s);x.closePath();x.fillStyle=colors[i];x.fill();a+=s;}});
+  x.beginPath();x.arc(cx,cy,r*.58,0,Math.PI*2);x.fillStyle="#fff";x.fill();
+  x.fillStyle="#1c1917";x.font="bold 16px ui-monospace";x.textAlign="center";x.fillText(String(t),cx,cy+5);
+}}
+bar("cVendor",VENDOR_LABELS,VENDOR_VALS,"#38bdf8"); bar("cPorts",PORT_LABELS,PORT_VALS,"#818cf8");
+pie("cSev",SEV,["#ef4444","#f59e0b","#eab308","#22c55e"]);
+document.getElementById("leg").textContent=VENDOR_LABELS.map((l,i)=>l+" ("+(VENDOR_VALS[i]||0)+")").join(" · ");
+{{const sel=document.getElementById("fVendor");VENDOR_LABELS.forEach(v=>{{const o=document.createElement("option");o.value=v.toLowerCase();o.textContent=v;sel.appendChild(o);}});}}
+const q=document.getElementById("q"),fR=document.getElementById("fRiesgo"),fS=document.getElementById("fSev"),fV=document.getElementById("fVendor"),tbl=document.getElementById("tbl");
+function apply(){{
+  const qq=q.value.toLowerCase(),fr=fR.value,fs=fS.value,fv=fV.value; let vis=0;
+  tbl.querySelectorAll("tbody tr").forEach(tr=>{{
+    const sev=tr.getAttribute("data-sev")||"",ven=tr.getAttribute("data-vendor")||"",rie=tr.getAttribute("data-risk")||"";
+    let ok=(!qq||tr.innerText.toLowerCase().includes(qq))&&(!fv||ven.includes(fv))&&(!fr||rie===fr);
+    if(fs==="sano")ok=ok&&!sev; else if(fs)ok=ok&&sev.includes(fs);
+    tr.style.display=ok?"":"none"; if(ok)vis++;
+  }});
+  document.getElementById("cont").textContent=vis+" / "+HOSTS.length+" visibles";
+  document.getElementById("ft").textContent=new Date().toLocaleString();
+}}
+q.addEventListener("input",apply);fR.addEventListener("change",apply);fS.addEventListener("change",apply);fV.addEventListener("change",apply);
+tbl.addEventListener("dblclick",e=>{{const tr=e.target.closest("tr");if(tr){{const ip=tr.children[0].innerText;navigator.clipboard?.writeText(ip);tr.style.background="rgba(56,189,248,.15)";setTimeout(()=>tr.style.background="",600);}}}});
+function dl(name,text,type){{const b=new Blob([text],{{type}});const a=document.createElement("a");a.href=URL.createObjectURL(b);a.download=name;a.click();}}
+function exportCsv(){{
+  const cols=["ip","hostname","mac","vendor","vendor_source","is_alive","latency_ms","risk","ports","findings","mdns","ssdp"];
+  const esc=v=>'"'+String(v??"").replace(/"/g,'""')+'"';
+  const rows=HOSTS.map(h=>[h.ip,h.hostname,h.mac,h.vendor,h.vendor_source,h.is_alive,h.latency_ms,(h.open_ports||[]).map(p=>p.port).join(" "),(h.vulnerabilities||[]).map(v=>v.cve+"("+v.severity+"/"+v.confidence+")").join(" "),(h.mdns_names||[]).join(" "),h.ssdp_location].map(esc).join(","));
+  dl("audeep_hosts.csv",[cols.join(",")].concat(rows).join("\n"),"text/csv");
+}}
+function exportJsonl(){{dl("audeep_hosts.jsonl",JSONL,"application/x-ndjson");}}
+(function live(){{
+  const el=document.getElementById("live");
+  if(location.protocol.startsWith("http")){{ el.textContent="live /json"; el.style.color="#16a34a";
+    setInterval(async()=>{{try{{const r=await fetch("/json",{{cache:"no-store"}});if(r.ok){{const j=await r.json();el.textContent="live "+new Date().toLocaleTimeString()+" ("+(j.hosts?.length||0)+" hosts)";}}}}catch(e){{}}}},5000);
+  }} else {{ el.textContent="offline file://"; }}
+}})();
+apply();
+</script>
+</body>
+</html>
+"##,
+            data = data_json.replace("</", "<\\/"),
+            jsonl_escaped = serde_json::to_string(&jsonl).unwrap_or_else(|_| "\"\"".to_string()),
+            vl = vendors.join("|"),
+            vv = vendors_vals(&self.hosts),
+            pl = puertos_top.iter().map(|(p, _)| p.clone()).collect::<Vec<_>>().join(","),
+            pv = puertos_top.iter().map(|(_, n)| n.to_string()).collect::<Vec<_>>().join(","),
+            sc = sev.0,
+            sa = sev.1,
+            sm = sev.2,
+            sb = sev.3,
+        ));
+
+        s
+    }
+
+    /// Filas de la tabla de eventos (cambios y anomalías).
+    fn eventos_html(&self) -> String {
+        if self.events.is_empty() {
+            return String::new();
+        }
+        let filas: String = self
+            .events
+            .iter()
+            .map(|e| {
+                let clase = match e.kind.as_str() {
+                    "nuevo" => "evN",
+                    "desaparecido" => "evD",
+                    "puerto_nuevo" => "evP",
+                    _ => "evA",
+                };
+                format!(
+                    "<tr><td class=\"{clase}\">{}</td><td>{}</td><td>{}</td><td>{}</td></tr>",
+                    escape(&e.kind),
+                    escape(&e.ip),
+                    escape(e.mac.as_deref().unwrap_or("—")),
+                    escape(&e.detail)
+                )
+            })
+            .collect();
+        format!(
+            r##"  <div class="card" style="border-left:3px solid #d97706">
+    <h2>// Cambios desde el último escaneo — {n}</h2>
+    <div style="overflow:auto;max-height:260px"><table class="ev"><thead><tr><th>Tipo</th><th>IP</th><th>MAC</th><th>Detalle</th></tr></thead><tbody>{filas}</tbody></table></div>
+  </div>
+"##,
+            n = self.events.len()
+        )
+    }
+
+    fn discos_html(&self) -> String {
+        self.hardware
+            .disks
+            .iter()
+            .map(|d| {
+                format!(
+                    "<tr><td>{}</td><td>{}</td><td>{}</td><td>{:.1} / {:.1} GB</td><td>{}</td></tr>",
+                    escape(&d.name),
+                    escape(&d.mount_point),
+                    escape(&d.file_system),
+                    d.available_gb,
+                    d.total_gb,
+                    if d.is_removable { "extraíble" } else { "fijo" }
+                )
+            })
+            .collect()
+    }
+
+    fn ifaces_html(&self) -> String {
+        self.hardware
+            .network_interfaces
+            .iter()
+            .map(|n| {
+                format!(
+                    "<tr><td>{}</td><td>{}</td><td>{}</td></tr>",
+                    escape(&n.name),
+                    escape(&n.mac),
+                    escape(&n.ips.join(", "))
+                )
+            })
+            .collect()
+    }
+
+    /// (vendors ordenados, puertos top, conteo por severidad)
+    fn graficos(
+        &self,
+    ) -> (
+        Vec<String>,
+        Vec<(String, usize)>,
+        (usize, usize, usize, usize),
+    ) {
+        let mut vendors: HashMap<String, usize> = HashMap::new();
+        let mut puertos: HashMap<String, usize> = HashMap::new();
+        let mut sev = HashMap::new();
         for h in &self.hosts {
             let v = h
                 .vendor
                 .clone()
                 .unwrap_or_else(|| "Desconocido".to_string());
-            *vendor_counts.entry(v).or_insert(0) += 1;
+            *vendors.entry(v).or_insert(0) += 1;
             for p in &h.open_ports {
-                *port_counts.entry(p.port.to_string()).or_insert(0) += 1;
+                *puertos.entry(p.port.to_string()).or_insert(0) += 1;
             }
-            for vuln in &h.vulnerabilities {
-                *sev_counts.entry(vuln.severity.clone()).or_insert(0) += 1;
+            for v in &h.vulnerabilities {
+                *sev.entry(v.severity.clone()).or_insert(0) += 1;
             }
         }
-        let mut vendor_sorted: Vec<_> = vendor_counts.into_iter().collect();
-        vendor_sorted.sort_by(|a, b| b.1.cmp(&a.1));
-        vendor_sorted.truncate(6);
-        let mut port_sorted: Vec<_> = port_counts.into_iter().collect();
-        port_sorted.sort_by(|a, b| b.1.cmp(&a.1));
-        port_sorted.truncate(8);
-
-        let vendor_labels = vendor_sorted
-            .iter()
-            .map(|(k, _)| html_escape(k))
-            .collect::<Vec<_>>()
-            .join("|");
-        let vendor_vals = vendor_sorted
-            .iter()
-            .map(|(_, v)| v.to_string())
-            .collect::<Vec<_>>()
-            .join(",");
-        let port_labels = port_sorted
-            .iter()
-            .map(|(k, _)| k.clone())
-            .collect::<Vec<_>>()
-            .join(",");
-        let port_vals = port_sorted
-            .iter()
-            .map(|(_, v)| v.to_string())
-            .collect::<Vec<_>>()
-            .join(",");
-        let sev_crit = sev_counts.get("critica").cloned().unwrap_or(0);
-        let sev_alta = sev_counts.get("alta").cloned().unwrap_or(0);
-        let sev_media = sev_counts.get("media").cloned().unwrap_or(0);
-        let sev_baja = sev_counts.get("baja").cloned().unwrap_or(0);
-        let total_vulns = self.network.total_vulnerabilities;
-
-        let data_json = serde_json::to_string(&self.hosts).unwrap_or_else(|_| "[]".to_string());
-        // Escape for html
-        let data_json_escaped = data_json.replace("</", "<\\/");
-
-        let base = format!(
-            r#"<!DOCTYPE html>
-<html lang="es">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>AuDeep — Reporte Mamón</title>
-<style>
-:root {{ --bg:#fdfbf7; --bg2:#f5f1e8; --fg:#1c1917; --muted:#78716c; --card:#ffffff; --card2:#fffbeb; --accent:#0ea5e9; --accent2:#e11d48; --border:#e7e5e4; --crit:#dc2626; --alta:#d97706; --media:#ca8a04; --baja:#16a34a; }}
-*{{box-sizing:border-box}} body{{margin:0;font-family: ui-sans-serif,system-ui,Segoe UI,Roboto,Helvetica,Arial; background: var(--bg); color:var(--fg); min-height:100vh;}}
-header{{padding:24px 20px 16px; border-bottom:1px solid var(--border); position:sticky; top:0; z-index:10; backdrop-filter: blur(8px); background:rgba(253,251,247,0.92)}} 
-h1{{margin:0;font-size:22px; letter-spacing:-0.3px; color:#1c1917; font-weight:800; font-family: ui-monospace, SFMono-Regular, Menlo, monospace}} h1 span{{color:var(--accent2)}} .sub{{color:var(--muted); font-size:12px; margin-top:4px; font-family: ui-monospace, monospace}}
-.wrap{{max-width:1200px; margin:0 auto; padding:20px}}
-.card{{background: var(--card); border:1px solid var(--border); border-radius:16px; padding:16px; margin-bottom:16px; box-shadow: 0 1px 3px rgba(0,0,0,0.06), 0 4px 12px rgba(0,0,0,0.04)}}
-.card h2{{margin:0 0 10px 0; font-size:12px; letter-spacing:0.8px; text-transform:uppercase; color:var(--muted); font-family: ui-monospace, monospace}}
-.grid{{display:grid; gap:10px; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr))}}
-.kv{{background:#ffffff; border:1px solid var(--border); border-radius:12px; padding:12px; position:relative}} .kv .k{{color:var(--muted); font-size:10px; text-transform:uppercase; letter-spacing:0.7px; font-family: ui-monospace, monospace}} .kv .v{{font-weight:700; margin-top:4px; font-size:16px}} .kv .v small{{font-weight:400; color:var(--muted); font-size:11px; font-family: ui-monospace, monospace}}
-.stats{{display:grid; grid-template-columns: repeat(4, 1fr); gap:10px; margin-bottom:14px}} @media(max-width:800px){{.stats{{grid-template-columns: repeat(2,1fr)}}}}
-.stat{{background: #ffffff; border:1px solid var(--border); border-radius:14px; padding:14px; text-align:center}} .stat .num{{font-size:26px; font-weight:800; line-height:1; font-family: ui-monospace, monospace}} .stat .lbl{{color:var(--muted); font-size:11px; margin-top:4px; text-transform:uppercase; letter-spacing:0.6px; font-family: ui-monospace, monospace}}
-.charts{{display:grid; grid-template-columns: 1.1fr 1fr 1fr; gap:10px; margin-bottom:16px}} @media(max-width:900px){{.charts{{grid-template-columns:1fr}}}}
-.chartBox{{background: #ffffff; border:1px solid var(--border); border-radius:14px; padding:14px}} .chartBox h3{{margin:0 0 8px 0; font-size:11px; color:var(--muted); text-transform:uppercase; letter-spacing:0.6px; font-family: ui-monospace, monospace}}
-.canv{{width:100%; height:auto; display:block}} #cVendor,#cPorts{{aspect-ratio: 2 / 1}} #cSev{{aspect-ratio: 1 / 1; max-width:220px; margin:0 auto; display:block}}
-table{{width:100%; border-collapse:collapse; font-size:12px}} th,td{{text-align:left; padding:9px; border-bottom:1px solid var(--border); vertical-align:top; font-family: ui-monospace, monospace; font-size:11px}} th{{color:var(--muted); font-weight:600; font-size:10px; text-transform:uppercase; letter-spacing:0.6px; position:sticky; top:0; background: #fffbeb}} 
-.tag{{display:inline-block; background:#ffffff; border:1px solid var(--border); border-radius:6px; padding:3px 7px; margin:2px; font-size:11px; font-family: ui-monospace, monospace}} .muted{{color:var(--muted)}}
-.controls{{display:flex; gap:8px; flex-wrap:wrap; margin-bottom:12px}} .controls input, .controls select{{flex:1; min-width:160px; padding:9px 11px; border-radius:8px; border:1px solid var(--border); background:#ffffff; color:var(--fg); outline:none; font-family: ui-monospace, monospace; font-size:12px}} .controls input:focus{{border-color:var(--accent)}}
-.btn{{padding:9px 13px; border-radius:8px; border:1px solid var(--border); background: #1c1917; color:#fdfbf7; cursor:pointer; font-weight:600; font-family: ui-monospace, monospace; font-size:12px}} .btn:hover{{background:#292524}}
-.badge{{display:inline-block; padding:2px 7px; border-radius:999px; font-size:11px; font-weight:700; border:1px solid transparent; font-family: ui-monospace, monospace}} .bCrit{{background:#fef2f2; color:#991b1b; border-color:#fecaca}} .bAlta{{background:#fffbeb; color:#92400e; border-color:#fde68a}} .bMedia{{background:#fefce8; color:#854d0e; border-color:#fde047}} .bBaja{{background:#f0fdf4; color:#166534; border-color:#bbf7d0}}
-.bar{{height:8px; border-radius:999px; background: #1c1917; display:block}} .barWrap{{background:#f5f5f4; border-radius:999px; overflow:hidden; height:8px}}
-footer{{color:var(--muted); font-size:11px; text-align:center; padding:16px; font-family: ui-monospace, monospace}}
-.pill{{display:inline-flex; align-items:center; gap:5px; padding:5px 9px; border-radius:999px; background:#fffbeb; border:1px solid var(--border); font-size:11px; font-family: ui-monospace, monospace}}
-</style>
-</head>
-<body>
-<header>
-  <h1><span style="color:var(--accent)">›_</span> AuDeep <span style="color:var(--muted); font-weight:400">::</span> AUDIT <span style="font-size:13px; background:#1c1917; color:#fdfbf7; padding:2px 6px; border-radius:6px; vertical-align:middle">v0.1.0</span></h1>
-  <div class="sub">Generado: {} · Subred: {} · Hosts: {} · Vulns: {} · Duración: {:.1}s · <span class="pill">● Live</span> <span id="liveStatus" class="muted">offline</span> · <span class="muted">`audeep --serve 0.0.0.0:8766`</span></div>
-</header>
-<div class="wrap">
-  <div class="stats">
-    <div class="stat"><div class="num" style="color:#38bdf8">{}</div><div class="lbl">Hosts vivos</div></div>
-    <div class="stat"><div class="num" style="color:#ef4444">{}</div><div class="lbl">Hallazgos</div></div>
-    <div class="stat"><div class="num" style="color:#a78bfa">{}</div><div class="lbl">Vendors únicos</div></div>
-    <div class="stat"><div class="num" style="color:#22c55e">{}</div><div class="lbl">Puertos distintos</div></div>
-  </div>
-
-  <div class="card" style="border-left:3px solid #1c1917">
-    <h2>// Hardware — {}</h2>
-    <p class="muted" style="margin:-4px 0 10px 0; font-size:11px; font-family: ui-monospace, monospace">Inventario local `sysinfo 0.30` + `Components` · CPU/Mem/Discos/IFaces/Sensores · Offline, sin agentes</p>
-    <div class="grid">
-      <div class="kv"><div class="k">Sistema</div><div class="v">{} {}<br><small>{}</small></div></div>
-      <div class="kv"><div class="k">CPU</div><div class="v">{}<br><small>{} núcleos físicos / {} lógicos @ {} MHz · {}</small></div></div>
-      <div class="kv"><div class="k">Memoria</div><div class="v">{:.1} / {:.1} GB<br><small>{:.1} GB disponible</small></div></div>
-      <div class="kv"><div class="k">Uptime / Carga</div><div class="v">{} s<br><small>{:.2} {:.2} {:.2} · {} sensores</small></div></div>
-    </div>
-  </div>
-
-  <div class="charts">
-    <div class="chartBox"><h3>Vendors Top</h3><canvas id="cVendor" class="canv" width="400" height="200"></canvas><div id="legendVendor" class="muted" style="font-size:11px; margin-top:6px"></div></div>
-    <div class="chartBox"><h3>Severidad Vulns</h3><canvas id="cSev" class="canv" width="220" height="220"></canvas><div style="display:flex; gap:6px; margin-top:8px; flex-wrap:wrap"><span class="badge bCrit">Crítica {}</span><span class="badge bAlta">Alta {}</span><span class="badge bMedia">Media {}</span><span class="badge bBaja">Baja {}</span></div></div>
-    <div class="chartBox"><h3>Puertos Top</h3><canvas id="cPorts" class="canv" width="400" height="200"></canvas></div>
-  </div>
-
-  <div class="card">
-    <h2>// Almacenamiento</h2>
-    <p class="muted" style="margin:-4px 0 10px 0; font-size:11px; font-family: ui-monospace, monospace">`Disks::new_with_refreshed_list()` · GB = 1024³ · Tipo fijo/extraíble</p>
-    <table><thead><tr><th>Nombre</th><th>Punto</th><th>FS</th><th>Espacio</th><th>Tipo</th></tr></thead><tbody>{}</tbody></table>
-  </div>
-
-  <div class="card">
-    <h2>// Interfaces locales · Sensores</h2>
-    <p class="muted" style="margin:-4px 0 10px 0; font-size:11px; font-family: ui-monospace, monospace">`Networks` MAC + `Components` temp · `load_avg` 1/5/15m · Normal vacío en Windows/VM</p>
-    <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px">
-      <div><table><thead><tr><th>Interfaz</th><th>MAC</th></tr></thead><tbody>{}</tbody></table></div>
-      <div><table><thead><tr><th>Etiqueta</th><th>Temp</th><th>Máx</th><th>Crítica</th></tr></thead><tbody>{}</tbody></table></div>
-    </div>
-  </div>
-
-  <div class="card" style="border-left:3px solid #dc2626">
-    <h2>// Red — {} vivos · {} hallazgos <span class="muted" style="font-weight:400">· OUI {} · cve.db {}</span></h2>
-    <p class="muted" style="margin:-4px 0 10px 0; font-size:11px; font-family: ui-monospace, monospace">Descubrimiento `/24` UDP trick + TCP 80/445/22/53 + `ping` + `arp -a` + OUI 40k + reverse DNS + `mdns-sd` + `SSDP` M-SEARCH · `COMMON_PORTS 21` + banner 800ms + `cve.db` SQLite offline</p>
-    <div class="controls">
-      <input id="q" placeholder="🔍 Buscar IP, hostname, MAC, vendor, mDNS, SSDP, puerto...">
-      <select id="fSev"><option value="">Todas severidades</option><option value="critica">Crítica</option><option value="alta">Alta</option><option value="media">Media</option><option value="baja">Baja</option><option value="sano">Sanos (0 vulns)</option></select>
-      <select id="fVendor"><option value="">Todos vendors</option></select>
-      <button class="btn" onclick="exportJson()">⬇ JSON</button>
-      <button class="btn" onclick="window.print()">🖨 Print</button>
-    </div>
-    <div style="overflow:auto; max-height:520px; border:1px solid var(--border); border-radius:12px">
-    <table id="tbl"><thead><tr><th>IP</th><th>Hostname</th><th>MAC</th><th>Vendor</th><th>Lat</th><th>Puertos</th><th>Vulns</th><th>mDNS</th><th>SSDP</th></tr></thead><tbody>{}</tbody></table>
-    </div>
-    <p class="muted" style="margin-top:10px; font-size:11px">Puertos escaneados: {} · mDNS/SSDP 1.2s · Doble click fila para copiar IP · <span id="filteredCount"></span></p>
-  </div>
-</div>
-<footer>AuDeep v0.1.0 · Rust · Offline-first · <span id="footTime"></span> · Hecho con 🦀</footer>
-"#,
-            self.generated_at.format("%Y-%m-%d %H:%M:%S UTC"),
-            html_escape(&subnet),
-            self.network.total_hosts_alive,
-            self.network.total_vulnerabilities,
-            self.network.scan_duration_secs,
-            self.network.total_hosts_alive,
-            self.network.total_vulnerabilities,
-            vendor_sorted.len(),
-            port_sorted.len(),
-            html_escape(&self.hardware.hostname),
-            html_escape(&self.hardware.os_name),
-            html_escape(&self.hardware.os_version),
-            html_escape(&self.hardware.kernel_version),
-            html_escape(&self.hardware.cpu.brand),
-            self.hardware.cpu.cores_physical.unwrap_or(0),
-            self.hardware.cpu.cores_logical,
-            self.hardware.cpu.frequency_mhz,
-            html_escape(&self.hardware.cpu.vendor),
-            self.hardware.memory.used_gb,
-            self.hardware.memory.total_gb,
-            self.hardware.memory.available_gb,
-            self.hardware.uptime_secs,
-            self.hardware.load_avg_one,
-            self.hardware.load_avg_five,
-            self.hardware.load_avg_fifteen,
-            self.hardware.sensors.len(),
-            sev_crit,
-            sev_alta,
-            sev_media,
-            sev_baja,
-            disks_rows,
-            net_ifaces,
-            sensors_rows,
-            self.hosts.len(),
-            self.network.total_vulnerabilities,
-            oui_count,
-            cve_count,
-            hosts_rows,
-            crate::scanner::COMMON_PORTS
-                .iter()
-                .map(|p| p.to_string())
-                .collect::<Vec<_>>()
-                .join(", ")
-        );
-
-        // JS para Charts + Filtros + Live
-        let js_template = r##"<script>
-const HOSTS=__DATA__;
-const VENDOR_LABELS="__VENDOR_LABELS__".split("|").filter(Boolean);
-const VENDOR_VALS="__VENDOR_VALS__".split(",").filter(Boolean).map(Number);
-const PORT_LABELS="__PORT_LABELS__".split(",").filter(Boolean);
-const PORT_VALS="__PORT_VALS__".split(",").filter(Boolean).map(Number);
-const SEV=[__SEV_CRIT__,__SEV_ALTA__,__SEV_MEDIA__,__SEV_BAJA__];
-function drawBar(id, labels, vals, color){
-  const c=document.getElementById(id); if(!c) return; const ctx=c.getContext('2d'); const W=c.width, H=c.height, pad=28;
-  ctx.clearRect(0,0,W,H); if(!vals.length){ ctx.fillStyle="#78716c"; ctx.font="12px ui-monospace, monospace"; ctx.fillText("sin datos", 10, H/2); return;}
-  const max=Math.max(...vals,1); const bw=(W-pad*2)/vals.length*0.62; const gap=(W-pad*2)/vals.length*0.38;
-  labels.forEach((lb,i)=>{ const x=pad + i*(bw+gap) + gap/2; const h=(vals[i]/max)*(H-pad*2-14); const y=H-pad - h;
-    const grad=ctx.createLinearGradient(x,y,x,y+h); grad.addColorStop(0, color); grad.addColorStop(1, "#fdfbf7");
-    ctx.fillStyle=grad; ctx.beginPath(); if(ctx.roundRect) ctx.roundRect(x,y,bw,h,6); else ctx.rect(x,y,bw,h); ctx.fill();
-    ctx.fillStyle="#1c1917"; ctx.font="10px ui-monospace, monospace"; ctx.textAlign="center"; ctx.fillText(String(vals[i]), x+bw/2, y-4);
-    ctx.fillStyle="#57534e"; ctx.font="9px ui-monospace, monospace"; let s=lb.length>14?lb.slice(0,13)+"…":lb; ctx.fillText(s, x+bw/2, H-6);
-  });
-}
-function drawPie(id, vals, colors){
-  const c=document.getElementById(id); if(!c) return; const ctx=c.getContext('2d'); const W=c.width, H=c.height; const cx=W/2, cy=H/2, r=Math.min(W,H)/2 -14;
-  ctx.clearRect(0,0,W,H); const total=vals.reduce((a,b)=>a+b,0); if(total===0){ ctx.fillStyle="#78716c"; ctx.font="12px ui-monospace, monospace"; ctx.textAlign="center"; ctx.fillText("0 hallazgos", cx, cy); return;}
-  let ang=-Math.PI/2; vals.forEach((v,i)=>{ const slice= v/total* Math.PI*2; ctx.beginPath(); ctx.moveTo(cx,cy); ctx.arc(cx,cy,r,ang, ang+slice); ctx.closePath(); ctx.fillStyle=colors[i]; ctx.fill(); ang+=slice; });
-  ctx.beginPath(); ctx.arc(cx,cy,r*0.58,0,Math.PI*2); ctx.fillStyle="#ffffff"; ctx.fill(); ctx.strokeStyle="#e7e5e4"; ctx.lineWidth=1; ctx.stroke();
-  ctx.fillStyle="#1c1917"; ctx.font="bold 16px ui-monospace, monospace"; ctx.textAlign="center"; ctx.fillText(String(total), cx, cy+5);
-  ctx.fillStyle="#57534e"; ctx.font="9px ui-monospace, monospace"; ctx.fillText("vulns", cx, cy+18);
-}
-drawBar("cVendor", VENDOR_LABELS, VENDOR_VALS, "#38bdf8");
-drawBar("cPorts", PORT_LABELS, PORT_VALS, "#818cf8");
-drawPie("cSev", SEV, ["#ef4444","#f59e0b","#eab308","#22c55e"]);
-{
-  const sel=document.getElementById("fVendor");
-  VENDOR_LABELS.forEach(v=>{ const o=document.createElement("option"); o.value=v.toLowerCase(); o.textContent=v; sel.appendChild(o); });
-}
-const q=document.getElementById("q"), fSev=document.getElementById("fSev"), fVendor=document.getElementById("fVendor"), tbl=document.getElementById("tbl");
-function apply(){
-  const qq=q.value.toLowerCase(), fs=fSev.value, fv=fVendor.value; let vis=0;
-  tbl.querySelectorAll("tbody tr").forEach(tr=>{
-    const txt=tr.innerText.toLowerCase();
-    const sev=tr.getAttribute("data-sev")||""; const vendor=tr.getAttribute("data-vendor")||"";
-    let ok= (!qq || txt.includes(qq)) && (!fv || vendor.includes(fv));
-    if(fs==="sano") ok= ok && !sev;
-    else if(fs) ok= ok && sev.includes(fs);
-    tr.style.display= ok? "":"none"; if(ok) vis++;
-  });
-  document.getElementById("filteredCount").textContent= vis + " / " + HOSTS.length + " visibles";
-  document.getElementById("footTime").textContent= new Date().toLocaleString();
-}
-q.addEventListener("input", apply); fSev.addEventListener("change", apply); fVendor.addEventListener("change", apply);
-tbl.addEventListener("dblclick", e=>{ const tr=e.target.closest("tr"); if(tr){ const ip=tr.children[0]?.innerText; if(ip){ navigator.clipboard?.writeText(ip); tr.style.background="rgba(56,189,248,0.15)"; setTimeout(()=>tr.style.background="",600);} }});
-function exportJson(){ const blob=new Blob([JSON.stringify({generated:new Date().toISOString(), hosts:HOSTS}, null,2)], {type:"application/json"}); const a=document.createElement("a"); a.href=URL.createObjectURL(blob); a.download="audeep_export.json"; a.click(); }
-// Live poll si está servido via http
-(function live(){
-  const isHttp=location.protocol.startsWith("http");
-  const el=document.getElementById("liveStatus");
-  if(isHttp){ el.textContent="live polling /json cada 5s"; el.style.color="#22c55e";
-    setInterval(async()=>{ try{ const r=await fetch("/json",{cache:"no-store"}); if(r.ok){ const j=await r.json(); el.textContent="live " + new Date().toLocaleTimeString() + " ("+ (j.hosts?.length||0) +" hosts)"; }}catch(e){} },5000);
-  } else { el.textContent="offline file://"; }
-})();
-// Vendor legend
-document.getElementById("legendVendor").textContent= VENDOR_LABELS.map((l,i)=> l + " ("+ (VENDOR_VALS[i]||0) +")").join(" · ");
-apply();
-</script>
-</body>
-</html>
-"##;
-        let js = js_template
-            .replace("__DATA__", &data_json_escaped)
-            .replace("__VENDOR_LABELS__", &vendor_labels)
-            .replace("__VENDOR_VALS__", &vendor_vals)
-            .replace("__PORT_LABELS__", &port_labels)
-            .replace("__PORT_VALS__", &port_vals)
-            .replace("__SEV_CRIT__", &sev_crit.to_string())
-            .replace("__SEV_ALTA__", &sev_alta.to_string())
-            .replace("__SEV_MEDIA__", &sev_media.to_string())
-            .replace("__SEV_BAJA__", &sev_baja.to_string());
-
-        let mut html = base;
-        html.push_str(&js);
-        html
-    }
-
-    pub fn save_html(&self, path: &Path) -> std::io::Result<()> {
-        fs::write(path, self.to_html())
+        let mut vs: Vec<_> = vendors.into_iter().collect();
+        vs.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+        vs.truncate(6);
+        let mut ps: Vec<_> = puertos.into_iter().collect();
+        ps.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+        ps.truncate(8);
+        let get = |k: &str| sev.get(k).copied().unwrap_or(0);
+        let conteo = (get("critica"), get("alta"), get("media"), get("baja"));
+        (vs.into_iter().map(|(k, _)| k).collect(), ps, conteo)
     }
 }
 
-fn html_escape(s: &str) -> String {
+fn vendors_vals(hosts: &[HostInfo]) -> String {
+    let mut vendors: HashMap<String, usize> = HashMap::new();
+    for h in hosts {
+        let v = h
+            .vendor
+            .clone()
+            .unwrap_or_else(|| "Desconocido".to_string());
+        *vendors.entry(v).or_insert(0) += 1;
+    }
+    let mut vs: Vec<_> = vendors.into_iter().collect();
+    vs.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+    vs.truncate(6);
+    vs.into_iter()
+        .map(|(_, n)| n.to_string())
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+fn fila_host(h: &HostInfo, r: &risk::RiskScore) -> String {
+    let puertos = if h.open_ports.is_empty() {
+        "<span class='muted'>ninguno (o filtrado)</span>".to_string()
+    } else {
+        h.open_ports
+            .iter()
+            .map(|p| {
+                let svc = p
+                    .service_hint
+                    .as_deref()
+                    .map(|s| format!(" ({s})"))
+                    .unwrap_or_default();
+                let banner = p
+                    .banner
+                    .as_deref()
+                    .map(|b| format!("<br><small class='muted'>{}</small>", escape(trunc(b, 80))))
+                    .unwrap_or_default();
+                format!("<span class='tag'>{}{svc}{banner}</span>", p.port)
+            })
+            .collect::<Vec<_>>()
+            .join(" ")
+    };
+
+    let hallazgos = if h.vulnerabilities.is_empty() {
+        "<span class='muted'>0</span>".to_string()
+    } else {
+        h.vulnerabilities
+            .iter()
+            .map(|v| {
+                let (borde, clase) = match v.severity.as_str() {
+                    "critica" => ("#dc2626", "bCrit"),
+                    "alta" => ("#d97706", "bAlta"),
+                    "media" => ("#ca8a04", "bMedia"),
+                    _ => ("#16a34a", "bBaja"),
+                };
+                let (conf_clase, conf_txt) = match v.confidence.as_str() {
+                    "confirmado" => ("bConf", "confirmado"),
+                    "probable" => ("bProb", "probable"),
+                    _ => ("bSosp", "sospecha"),
+                };
+                let evidencia = v
+                    .evidence
+                    .as_deref()
+                    .map(|e| format!("<br><small class='muted'>evidencia: {}</small>", escape(trunc(e, 120))))
+                    .unwrap_or_default();
+                format!(
+                    "<span style=\"display:inline-block;margin:2px;padding:4px 7px;background:#fff;border:1px solid #e7e5e4;border-left:3px solid {borde};border-radius:6px;font-size:11px\"><b>{}</b> <span class=\"badge {clase}\">{}</span> <span class=\"badge {conf_clase}\">{conf_txt}</span> :{}<br><small class='muted'>{}</small>{evidencia}</span>",
+                    escape(&v.cve),
+                    escape(&v.severity),
+                    v.port,
+                    escape(trunc(&v.description, 150)),
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(" ")
+    };
+
+    let extra = {
+        let mut partes: Vec<String> = Vec::new();
+        if !h.mdns_names.is_empty() {
+            partes.push(format!("mDNS: {}", escape(&h.mdns_names.join(", "))));
+        }
+        if let Some(s) = h.ssdp_location.as_deref() {
+            partes.push(format!("SSDP: {}", escape(trunc(s, 60))));
+        }
+        if partes.is_empty() {
+            "—".to_string()
+        } else {
+            partes.join("<br>")
+        }
+    };
+
+    let sev = h
+        .vulnerabilities
+        .iter()
+        .map(|v| v.severity.as_str())
+        .collect::<Vec<_>>()
+        .join(",");
+    let vendor = h.vendor.clone().unwrap_or_else(|| "—".to_string());
+    let fuente = h
+        .vendor_source
+        .as_deref()
+        .map(|s| format!(" <small class='muted'>({})</small>", escape(s)))
+        .unwrap_or_default();
+    let rclase = match r.level {
+        "critico" => "rCrit",
+        "alto" => "rAlto",
+        "medio" => "rMedio",
+        _ => "rBajo",
+    };
+    // Clave del filtro JS: el nivel visible puede traer espacio ("sin riesgo"),
+    // el atributo va sin espacio para que el `select` matchee exacto.
+    let risk_key = match r.level {
+        "critico" => "critico",
+        "alto" => "alto",
+        "medio" => "medio",
+        "bajo" => "bajo",
+        _ => "sin",
+    };
+    let motivos = if r.reasons.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "<br><small class='muted'>{}</small>",
+            escape(trunc(&r.reasons.join("; "), 90))
+        )
+    };
+
+    format!(
+        "<tr data-ip='{ip}' data-sev='{sev}' data-vendor='{ven}' data-risk='{risk}'><td>{ip}</td><td>{host}</td><td>{mac}</td><td>{vendor}{fuente}</td><td class='risk {rclase}'>{score} {level}{motivos}</td><td>{puertos}</td><td>{hallazgos}</td><td>{extra}</td></tr>",
+        ip = escape(&h.ip),
+        sev = sev,
+        ven = escape(&vendor.to_lowercase()),
+        risk = risk_key,
+        host = escape(h.hostname.as_deref().unwrap_or("—")),
+        mac = escape(h.mac.as_deref().unwrap_or("—")),
+        score = r.score,
+        level = escape(r.level),
+    )
+}
+
+fn trunc(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        return s.to_string();
+    }
+    let mut out: String = s.chars().take(max.saturating_sub(1)).collect();
+    out.push('…');
+    out
+}
+
+/// Escapa HTML. Acepta `&str` o `String` (hay call sites con `trunc()`).
+fn escape(s: impl AsRef<str>) -> String {
+    let s = s.as_ref();
     s.replace('&', "&amp;")
         .replace('<', "&lt;")
         .replace('>', "&gt;")
         .replace('"', "&quot;")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::hardware;
+    use crate::scanner::PortResult;
+    use crate::vuln::Finding;
+
+    fn host(ip: &str, ports: &[u16], vulns: Vec<Finding>) -> HostInfo {
+        HostInfo {
+            ip: ip.to_string(),
+            hostname: Some(format!("host-{ip}")),
+            mac: Some("24:a6:5e:00:00:01".to_string()),
+            vendor: Some("Tenda".to_string()),
+            vendor_source: Some("oui".to_string()),
+            is_alive: true,
+            open_ports: ports
+                .into_iter()
+                .map(|p| PortResult {
+                    port: *p,
+                    state: "open".to_string(),
+                    banner: None,
+                    service_hint: Some("test".to_string()),
+                })
+                .collect(),
+            latency_ms: Some(3),
+            vulnerabilities: vulns,
+            mdns_names: Vec::new(),
+            ssdp_location: None,
+        }
+    }
+
+    fn finding(cve: &str, sev: &str, conf: &str) -> Finding {
+        Finding {
+            cve: cve.to_string(),
+            severity: sev.to_string(),
+            port: 445,
+            service: "SMB".to_string(),
+            banner: Some("SMB1 habilitado".to_string()),
+            confidence: conf.to_string(),
+            evidence: Some("negociacion SMB real: SMB1 habilitado".to_string()),
+            description: "desc".to_string(),
+            recommendation: "rec".to_string(),
+        }
+    }
+
+    fn reporte(hosts: Vec<HostInfo>, events: Vec<Event>) -> AuditReport {
+        AuditReport::new(
+            hardware::collect_hardware_info(),
+            hosts,
+            Some("192.168.1.0/24".to_string()),
+            1.5,
+        )
+        .with_events(events)
+    }
+
+    #[test]
+    fn html_has_rows_risk_confidence_and_evidence() {
+        let r = reporte(
+            vec![
+                host(
+                    "192.168.1.10",
+                    &[445, 3389],
+                    vec![finding("CVE-2017-0144", "critica", "confirmado")],
+                ),
+                host("192.168.1.11", &[], vec![]),
+            ],
+            Vec::new(),
+        );
+        let html = r.to_html();
+        assert!(html.contains("192.168.1.10"));
+        assert!(
+            html.contains("data-risk='critico'"),
+            "el host con critica confirmada es critico"
+        );
+        assert!(html.contains("confirmado"));
+        assert!(html.contains("evidencia: negociacion SMB"));
+        assert!(html.contains("exportCsv"));
+        assert!(
+            html.contains("data-risk='sin"),
+            "el host limpio queda sin riesgo"
+        );
+        assert!(r.network.critical_hosts >= 1);
+    }
+
+    #[test]
+    fn events_banner_only_when_there_are_events() {
+        let sin = reporte(vec![host("192.168.1.10", &[], vec![])], Vec::new()).to_html();
+        assert!(!sin.contains("Cambios desde el último escaneo"));
+
+        let con = reporte(
+            vec![host("192.168.1.10", &[], vec![])],
+            vec![Event {
+                kind: "nuevo".to_string(),
+                ip: "192.168.1.99".to_string(),
+                mac: Some("aa:bb:cc:dd:ee:ff".to_string()),
+                detail: "dispositivo nuevo".to_string(),
+            }],
+        )
+        .to_html();
+        assert!(con.contains("Cambios desde el último escaneo"));
+        assert!(con.contains("192.168.1.99"));
+        assert!(con.contains("dispositivo nuevo"));
+    }
+
+    #[test]
+    fn json_roundtrip_keeps_new_fields() {
+        let r = reporte(
+            vec![host(
+                "192.168.1.10",
+                &[445],
+                vec![finding("CVE-2017-0144", "critica", "confirmado")],
+            )],
+            Vec::new(),
+        );
+        let json = r.to_json_pretty().unwrap();
+        assert!(json.contains("\"confidence\""));
+        assert!(json.contains("\"evidence\""));
+        assert!(json.contains("\"vendor_source\""));
+        assert!(json.contains("\"events\""));
+        assert!(json.contains("\"critical_hosts\""));
+    }
+
+    #[test]
+    fn escaping_and_truncation_are_safe() {
+        assert_eq!(
+            escape("<b>&\"x\"</b>"),
+            "&lt;b&gt;&amp;&quot;x&quot;&lt;/b&gt;"
+        );
+        assert_eq!(trunc("abcdef", 4), "abc…");
+        assert_eq!(trunc("ab", 4), "ab");
+    }
 }

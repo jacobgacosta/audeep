@@ -62,6 +62,11 @@ fn oui_curated() -> &'static HashMap<String, String> {
     CACHE.get_or_init(|| serde_json::from_str(OUI_JSON_SMALL).unwrap_or_default())
 }
 
+/// Cantidad de prefijos OUI disponibles (se muestra en el reporte).
+pub fn oui_count() -> usize {
+    oui_registry().len().max(oui_curated().len())
+}
+
 /// Registro OUI completo (~40k prefijos), se carga una sola vez.
 fn oui_registry() -> &'static HashMap<String, String> {
     use std::sync::OnceLock;
