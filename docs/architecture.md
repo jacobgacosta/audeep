@@ -1,65 +1,113 @@
-# AuDeep — Arquitectura y Diseño (Rust) · v0.1.0
+# AuDeep — Arquitectura y Diseño (Rust) · v0.2
 
-> **Origen:** `knowledge/dispositivo_auditor.md` (diseño inicial) → migrado a `audeep/docs/architecture.md` versionado para `jacobgacosta/audeep`. Offline-first, portable USB y plug&play Raspberry Pi.
+> Offline-first, portable USB y plug&play Raspberry Pi. Un binario, sin servicios externos.
+> Origen: `knowledge/dispositivo_auditor.md` → migrado a `docs/architecture.md` y versionado en `jacobgacosta/audeep`.
 
-## Stack actual (verificado `9d67bfd` + `b903a5c`)
+## Principio de diseño
+
+Cada afirmación del reporte tiene que poder sostenerse:
+
+1. **¿Está vivo?** No se adivina: se prueba en capa 2 (ARP) y, si no, se acepta un RST de TCP como prueba de vida. El `ping` solo cuenta si la salida trae `TTL=`, porque es lo único que no se traduce.
+2. **¿Es vulnerable?** Un puerto abierto no es una vulnerabilidad. Cuando se puede confirmar sin exploits, se confirma (SMBv1 negociado, versión de OpenSSH contra rangos); cuando no, se dice `probable` o `sospecha` y se muestra la evidencia.
+3. **¿Qué cambió?** Cada escaneo se compara con el anterior; las anomalías de capa 2 (MAC repetida, MAC del gateway cambiada) son alertas, no adornos.
+
+## Stack
 
 | Capa | Crate | Uso |
 |------|-------|-----|
-| Hardware | `sysinfo 0.30` + `Components` | OS, kernel, uptime, `load_avg 1/5/15`, CPU `brand/vendor/cores/freq`, RAM `total/used/available`, `Disks`, `Networks` MAC, sensores temp |
-| Red | `tokio` 64 tasks + `dns-lookup` 2.1 + `mdns-sd 0.11` | Subnet `/24` UDP trick `8.8.8.8:80`, `is_host_alive` TCP 80/445/22/53 + `ping -n/-c` TTL, `arp -a`/`/proc/net/arp` + OUI 40k `assets/oui_full.json` + `locally-administered` bit `0x02`, reverse DNS 500ms, mDNS `browse _http._tcp` + SSDP M-SEARCH `239.255.255.250:1900` |
-| Scanner | `tokio` | `COMMON_PORTS` 21 puertos, `scan_port` con banner 800ms, `scan_common_ports` concurrente |
-| Vuln | `rusqlite 0.31 bundled` + `serde_json` | `assets/cve.db` SQLite 7 curados (EternalBlue 445, BlueKeep 3389, Heartbleed) + NVD fetch 90d via `xtask fetch-nvd --limit 30 --merge` (`reqwest rustls`), `include_bytes!` offline |
-| Reporte | `chrono` | `AuditReport` JSON pretty + HTML crema hack offline `src/report.rs:1` Canvas 2D sin CDN (`file://` + `http://127.0.0.1:8766/`) |
-| Serve | `tokio::net::TcpListener` | `0.0.0.0:8766` (evita Koupper 8080) `GET /` `GET /json` `GET /health` `GET /docs`, `Access-Control-Allow-Origin: *`, cache 12s + loading 0.01s non-blocking |
-| CLI | `clap 4 derive` | `--no-scan` `--json/--html` `--serve [ADDR]` default `8766` |
-| Build | `zig 0.16` `cargo-zigbuild` | `aarch64`/`armv7`/`musl` 7MB estáticos, `xtask` Rust puro |
+| Hardware | `sysinfo 0.30` + `Components` | OS, kernel, uptime, `load_avg`, CPU (marca/vendor/núcleos/freq), RAM, discos, MACs, temperaturas |
+| Interfaces | `if-addrs 0.13` | IPs por interfaz y **máscara real** para calcular el prefijo (no se asume /24) |
+| Red | `tokio` + `dns-lookup` + `mdns-sd` | Barrido ARP-first por UDP, TCP de 3 estados, reverse DNS 500 ms, mDNS (9 servicios) y SSDP M-SEARCH |
+| Sondas | propio (`probe.rs`) | Negociación SMB1 de 73 bytes y parseo de banners SSH |
+| Vulnerabilidades | `rusqlite 0.31 bundled` + `serde_json` | Reglas curadas en JSON (con rangos de versión) + CVEs de NVD en SQLite, cacheadas con `OnceLock` |
+| Riesgo | propio (`risk.rs`) | Score 0-100 por severidad, certeza y exposición de servicios |
+| Historial | `rusqlite` | `scans` + `devices`, diff y anomalías, poda a los últimos 200 escaneos |
+| Reporte | `chrono` | JSON + HTML crema offline (Canvas 2D, sin CDN) con riesgo, evidencia, eventos y export CSV/JSONL |
+| Serve | `tokio::net::TcpListener` | Loopback por defecto, caché con TTL, `ETag`/`304`, token opcional, `/scan` |
+| CLI | `clap 4 derive` | `--no-scan`, `--json/--html`, `--history/--no-history`, `--config`, `--serve*` |
+| Build | `zig` + `cargo-zigbuild` | `aarch64` / `armv7` / `x86_64-musl` estáticos de ~7 MB |
 
-## Diagrama
+## Flujo
 
 ```
-[Hardware sysinfo] → [Network tokio 64 + arp + OUI 40k + mdns/ssdp] → [Scanner 21 ports] → [Vuln rusqlite cve.db] → [Report crema] → [Serve 8766] → [Web 5111 React Chart.js]
-         ↓                                    ↓
-   Disks/IFaces/Sensors              mDNS _http._tcp + SSDP 239.255.255.250
+main.rs
+ ├─ config::AuditConfig::load()          (audeep.json o --config)
+ ├─ scanner::set_ports(cfg.ports)
+ ├─ hardware::collect_hardware_info()    (sysinfo + if-addrs)
+ ├─ network::discover_hosts(t, n)        ARP sweep → candidatos → puertos
+ │    └─ vuln::check_host()              reglas + confianza + evidencia
+ ├─ network::enrich_with_arp()           MAC/vendor (+fuente) y merge de silenciosos
+ ├─ network::enrich_with_mdns_ssdp()     nombres reales y deducción de fabricante
+ ├─ history::History::diff_and_record()  eventos: nuevo/desaparecido/puerto nuevo + anomalías L2
+ ├─ risk::score_host()                   score, nivel y motivos por host
+ └─ report::AuditReport → JSON + HTML → serve (opcional)
 ```
-
-Flujo `main.rs`: `collect_hardware_info()` → `discover_hosts(320,64)` → `enrich_with_arp` → `enrich_with_mdns_ssdp(800ms)` → `scan_common_ports` → `check_host(cve.db)` → `AuditReport::new → to_html/to_json` → `serve 8766` → `5173 fetch /json 5s`.
 
 ## Módulos
 
 ### `hardware.rs`
-`System::new_all()` + `Disks::new_with_refreshed_list()` + `Networks` + `Components` + `System::load_average()`. Convierte bytes a GB `1024³`. Sin `raw-cpuid` (se usa `sysinfo` vendor).
+`System::new_all()`, `Disks::new_with_refreshed_list()`, `Networks`, `Components`, `System::load_average()`. Las IPs de cada interfaz se completan con `if-addrs` (sysinfo solo da MAC) y si el volumen no tiene nombre se usa el punto de montaje.
+
+### `arp.rs`
+`parse_arp_table()` acepta la salida de `arp -a` (Windows, con encabezados y campo *Type* en cualquier idioma) y `/proc/net/arp` (Linux): exige IPv4 en la primera columna, busca la MAC en las siguientes, valida 6 octetos hexadecimales y descarta multicast/broadcast/cero. `is_locally_administered()` detecta el bit `0x02`.
 
 ### `network.rs`
-- `get_local_ipv4()` UDP trick, `local_subnet_cidr()` `/24`, `hosts_in_subnet()`
-- `is_host_alive` + `ping_host` TTL check, `try_resolve_hostname` `dns_lookup` 500ms `spawn_blocking`
-- `discover_hosts` 64 concurrency, `enrich_with_arp` merge + `enrich_with_mdns_ssdp` 800ms
-- `discover_mdns_map` `mdns_sd::ServiceDaemon` browse 9 services, `discover_ssdp_map` UDP M-SEARCH
+- `local_net()`: IP + prefijo real desde la máscara (`netmask_to_prefix` valida contigüidad).
+- `arp_sweep()`: dos rondas de UDP a todos los hosts del alcance para forzar ARP; después lee la tabla. En redes grandes el alcance se limita al `/24` propio.
+- `discover_hosts()`: candidatos = respondieron ARP; si la tabla no dio nada, cae al barrido TCP+ping acotado.
+- `is_host_alive()`: puerto abierto o **RST** (`Probe::Refused`); si no, `ping` con `TTL=`.
+- `lookup_vendor_guess()`: curado → bit de MAC local → registro de 40k prefijos, siempre devolviendo la fuente.
+- `enrich_with_mdns_ssdp()`: nombres mDNS/SSDP, deducción por tokens (`contains_token`) y confirmación HTTP opcional.
+
+### `scanner.rs`
+`Probe { Open, Refused, Filtered }`, `probe_port`, `should_grab_banner` (solo servicios que saludan primero: 80/443/3389 no gastan 800 ms), `active_ports`/`set_ports` para la config y enriquecimiento del 445 con el dialecto SMB negociado.
+
+### `probe.rs`
+`smb1_negotiate_request()` (NetBIOS 4 + SMB 32 + WordCount + ByteCount + 3 dialectos = 73 bytes), `smb_dialect()` (`0xFF` SMB1 / `0xFE` SMB2-3), `parse_ssh_banner()`, `version_key()` y `version_in_range()`.
 
 ### `vuln.rs`
-`VulnEntry` `match_banner_contains`/`match_ports`, `load_db()` jerárquico `cve.db` junto a binario → `cwd` → `include_bytes!` → fallback `vuln_db.json`, `query_sqlite` para NVD.
+`VulnEntry` con `match_ports`, `match_banner_contains`, `match_versions` y `confidence`. `load_db()` mezcla el JSON curado (fuente de verdad, incluye rangos) con lo que aporte la SQLite de NVD, sin repetir CVEs, y cachea con `OnceLock`. `check_port()` combina los criterios y produce `Finding` con `confidence` y `evidence`.
+
+### `risk.rs`
+`score_host()`: peso por severidad ajustado por certeza (una crítica confirmada pesa más que una sospecha) + exposición de servicios sensibles (RDP, Telnet, VNC, SMB, bases de datos). Niveles: `sin riesgo`, `bajo`, `medio`, `alto`, `critico`.
+
+### `history.rs`
+Tablas `scans` y `devices`. `diff_and_record()` guarda el escaneo y devuelve eventos: `nuevo`, `desaparecido`, `puerto_nuevo`, `mac_duplicada` (misma MAC en varias IP) y `gateway_cambio` (heurística: la IP más baja, casi siempre `.1`). Poda a los últimos 200 escaneos.
 
 ### `report.rs`
-Crema `#fdfbf7` hack `›_ AuDeep :: AUDIT`, stats 4, charts Canvas 2D (vendors 6, sev dona 220x220, ports 8), tabla 9 cols filtrable `data-ip/vendor/sev`, `file://` offline.
+JSON pretty con todo el detalle y HTML offline: tarjetas de estadísticas (incluye hosts críticos), tabla ordenada por riesgo con score y motivos, hallazgos con severidad + confianza + evidencia, panel de cambios desde el último escaneo, discos e interfaces con IPs, gráficos Canvas y export **CSV** y **JSONL** generado en el navegador (funciona también desde `file://`).
 
 ### `serve.rs`
-`TcpListener` `0.0.0.0:8766`, cache `Arc<Mutex<Option<(Instant,json,html)>>>` 12s + `scanning` flag, `GET /` loading 1045 bytes `meta refresh 2s` si no hay cache, `GET /json` 202 scanning else 200, CORS `*`.
+`TcpListener`. Rutas `/` (HTML), `/json`, `/health`, `/scan` (fuerza), `/docs`, `/docs/conceptos`. Caché con TTL configurable y regeneración en segundo plano (sirve lo viejo mientras escanea), `ETag` con `304`, `X-Content-Type-Options`, `Referrer-Policy`, CORS `*` para el frontend de 5111 y token opcional por query o cabecera.
+
+### `config.rs`
+`audeep.json` con `probe_timeout_ms`, `concurrency`, `mdns_timeout_ms`, `ports` y `exclude`; todos opcionales, normalizados y validados.
 
 ## Portabilidad
 
-- **USB musl** `x86_64-unknown-linux-musl` estático sin `glibc`
-- **Pi** `aarch64`/`armv7` via `scripts/build_rpi.ps1` `zig`, `deploy/systemd/audeep.service` + `audeep-usb@.service` + `99-audeep-usb.rules` + `deploy/ap/hostapd.conf` `AuDeep-Auditor` `192.168.4.1` `dnsmasq`
+- **USB**: `x86_64-unknown-linux-musl` estático (sin `glibc`).
+- **Pi**: `aarch64`/`armv7` con `scripts/build_rpi.ps1` (zig), `deploy/systemd/audeep.service`, `deploy/usb/` y `deploy/ap/` (`AuDeep-Auditor`, `192.168.4.1`, hostapd + dnsmasq).
+- **Docker**: imagen distroless; sin `ping`/`arp` el descubrimiento se apoya solo en TCP, así que conviene `--network host`.
 
-## Frontend independiente `audeep-web` (Vite 8 + React 19 + TS 6 + Chart.js 4 + Tailwind 3)
+## Frontend independiente (`../audeep-web`)
 
-- `src/types.ts` espejo Rust, `src/api/audeep.ts` `BASE 8766` `fetchHealth/fetchAudit` con `202` handling, `src/App.tsx` dashboard crema + `src/components/Docs.tsx` este doc, `vite.config.ts` `5111`
-- `npm run dev` → `http://127.0.0.1:5111/` fetch `http://127.0.0.1:8766/json` polling 5s
+Vite + React + Chart.js consume `http://127.0.0.1:8766/json` cada 5 s. Los campos nuevos (`vendor_source`, `confidence`, `evidence`, `events`, `critical_hosts`) son aditivos: el frontend sigue funcionando y puede adoptarlos cuando quiera.
 
-## Hoja de ruta
+## Roadmap
 
-- [x] OUI 40k + `OnceLock` + locally-administered
-- [x] `cve.db` SQLite + `xtask fetch-nvd` 90d
-- [x] `mDNS/SSDP` + `serve` + `clap` + `xtask` Rust
-- [x] Reporte crema hack + dona fix + `5111`/`8766`
-- [ ] `cargo test` cobertura + `clippy`
-- [ ] `docs` in-site ya en `5111` tab Docs + `8766/docs` (este archivo)
+- [x] Veredicto de host por ARP/TTL/RST
+- [x] Parser ARP multi-formato + descubrimiento ARP-first
+- [x] Subred real por máscara e IPs de interfaz
+- [x] Vendor con fuente y sin falsos positivos
+- [x] Confirmación de SMBv1 y rangos de versión SSH
+- [x] Confianza y evidencia por hallazgo
+- [x] Score de riesgo por host y orden por riesgo
+- [x] Historial con diff y anomalías de capa 2
+- [x] `serve` con caché, token, ETag y bind seguro por defecto
+- [x] `audeep.json` y caché de la base de CVEs
+- [x] Reporte v2 con evidencia y export CSV/JSONL
+- [x] CI (fmt + clippy + tests en Linux y Windows)
+- [ ] Probar RDP (X.224/NLA) para confirmar BlueKeep
+- [ ] Notificaciones (webhook/Telegram) cuando aparezca un dispositivo o cambie el gateway
+- [ ] Actualización automática del registro OUI desde IEEE
+- [ ] Empaquetado `.deb`/`.rpm` y release con los binarios de las tres arquitecturas

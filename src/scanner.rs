@@ -61,6 +61,11 @@ pub fn should_grab_banner(port: u16) -> bool {
 /// Winsock crudo sin mapear, así que se aceptan también WSAECONNREFUSED (10061)
 /// y WSAECONNRESET (10054). Un timeout (10060) o host inalcanzable (10065) NO
 /// cuentan: no son prueba de vida.
+///
+/// Medido en Windows: `connect` a un puerto cerrado del propio equipo puede
+/// resolverse como timeout aunque Winsock haya visto el RST (10061). Por eso el
+/// veredicto de vida en la LAN no depende de esto: lo sostienen el barrido ARP
+/// (`network::arp_sweep`) y, como respaldo, el `TTL=` del ping.
 pub fn is_refused(e: &std::io::Error) -> bool {
     use std::io::ErrorKind;
     if matches!(

@@ -1,63 +1,117 @@
-# AuDeep — Auditor de Hardware y Red (Rust) · Backend
+# AuDeep — Auditor de Hardware y Red (Rust) · v0.2
 
-Herramienta offline, portable (USB) y plug&play (Raspberry Pi) para inventario de hardware, descubrimiento de red, escaneo de puertos y detección de vulnerabilidades. Un solo binario estático, sin dependencias. **Proyecto independiente y limpio** (ver `audeep-web` para frontend).
+Herramienta offline, portable (USB) y plug&play (Raspberry Pi) para inventario de hardware, descubrimiento de red, escaneo de puertos y detección de vulnerabilidades. Un solo binario estático, sin dependencias en runtime. Proyecto independiente y limpio (el frontend vive en `../audeep-web`).
 
-## Características
-- **Hardware** `src/hardware.rs:1` OS/CPU/RAM/Discos/IFaces/Sensores (`sysinfo 0.30` + `Components` + `load_avg`)
-- **Descubrimiento** `src/network.rs:1` subnet `/24` UDP trick, 254 hosts 64 tasks, `is_host_alive` TCP 80/445/22/53 + `ping` TTL, `arp -a` + OUI 40k `assets/oui_full.json:1` + `locally-administered`, reverse DNS `dns-lookup` + `mdns-sd` + `SSDP` M-SEARCH
-- **Escáner** `src/scanner.rs:1` `tokio` async 21 `COMMON_PORTS` banner 800ms
-- **Vuln** `src/vuln.rs:1` SQLite offline `assets/cve.db:1` (7 curados + NVD fetch via `xtask` `rusqlite bundled`) + `xtask fetch-nvd` 90d window
-- **Reporte** `src/report.rs:1` JSON + HTML crema hack minimalista offline (Canvas 2D, sin CDN, `file://` + `http://127.0.0.1:8766/`)
-- **Serve** `src/serve.rs:1` `TcpListener` `0.0.0.0:8766` (evita Koupper 8080) `GET /` `GET /json` `GET /health` con `Access-Control-Allow-Origin: *` + cache 12s + loading non-blocking
-- **CLI** `src/main.rs:1` `clap 4 derive` `--no-scan` `--json` `--html` `--serve [ADDR]` (default `8766`)
+Lo que la hace distinta de un `nmap` con esteroides: **dice con qué certeza afirma cada cosa y avisa qué cambió** desde el escaneo anterior.
+
+## Novedades v0.2
+
+- **Veredicto de host honesto**: `Probe::Open | Refused | Filtered`. Un RST cuenta como host vivo; un timeout no afirma nada. Se acabó el heurístico de `ping` que leía textos en inglés que en otros idiomas no existen (`network::ping_reply_is_alive` solo acepta `TTL=`).
+- **Descubrimiento ARP-first**: barrido UDP que fuerza la resolución ARP de toda la red y después lee la tabla. Es lo que hace que una LAN de 254 hosts se resuelva en segundos y que aparezcan los dispositivos silenciosos (IoT sin puertos abiertos).
+- **Subred real por máscara** (`if-addrs`), no `/24` asumido, con techo de hosts y barrido acotado al `/24` propio en redes enormes.
+- **Parser ARP multi-formato y validado** (`src/arp.rs`): Windows/Linux, cualquier idioma del campo *Type*, MAC validada y multicast/broadcast descartados.
+- **Vendor con fuente**: `oui` (registro), `oui-local` (MAC aleatoria: el OUI **no** identifica a nadie), `hostname`, `mdns`, `ssdp`, `banner`, `puerto`, `http`. Y sin falsos positivos por substring (`contains_token`).
+- **Confirmación real de SMBv1** (`src/probe.rs`): se negocia el protocolo en el 445 y se mira qué dialecto acepta el equipo. Solo si acepta SMB1 se marca EternalBlue.
+- **SSH por rango de versión**: del banner se extrae producto y versión y se compara contra rangos por aviso (7.0–7.6, 8.0–9.3…), en vez de una lista de substrings.
+- **Confianza y evidencia por hallazgo**: `confirmado` / `probable` / `sospecha` + con qué se sostiene (banner, versión, negociación activa).
+- **Score de riesgo por host** (`src/risk.rs`): 0-100, nivel y motivos; el reporte se ordena por riesgo y no por IP.
+- **Historial con diff y anomalías de capa 2** (`src/history.rs`, SQLite): dispositivos nuevos, desaparecidos, puertos que se abrieron, **la misma MAC en varias IPs** (ARP spoofing o virtualización) y **la MAC del gateway cambiada** (posible MitM).
+- **`serve` endurecido**: escucha en loopback por defecto, TTL de caché configurable, token opcional, `ETag`/`304`, cabeceras de seguridad y `/scan` para forzar. Ya no re-escanea la red cada 12 segundos.
+- **Config `audeep.json`** con timeouts, puertos y exclusiones.
+- **Caché de la base de CVEs** con `OnceLock` (antes se reconstruía en cada host y escribía un SQLite temporal por host).
+- **CI**: `cargo fmt --check`, `cargo clippy -D warnings` y `cargo test` en Linux y Windows.
 
 ## Uso rápido (Windows)
+
 ```pwsh
 $env:PATH="C:\Users\jacob\AppData\Local\Temp\zig-x86_64-windows-0.16.0;"+$env:PATH
 cargo zigbuild --target x86_64-pc-windows-gnu
-.\target\x86_64-pc-windows-gnu\debug\audeep.exe --help
-.\target\x86_64-pc-windows-gnu\debug\audeep.exe
-# 14 hosts 3 vulns -> audeep_reporte.html (crema 35KB) + audeep_reporte.json
-start audeep_reporte.html
-# o serve live:
-.\target\x86_64-pc-windows-gnu\debug\audeep.exe --serve
-# abre http://127.0.0.1:8766/ (Escaneando… 0.01s -> mamón 10s bg)
+.\target\x86_64-pc-windows-gnu\debug\audeep.exe            # escanea y escribe los reportes
+.\target\x86_64-pc-windows-gnu\debug\audeep.exe --serve    # http://127.0.0.1:8766/
 ```
+
+Salida por defecto: `audeep_reporte.html`, `audeep_reporte.json` y `audeep_history.db`.
 
 ## CLI
-- `--no-scan` solo hardware
-- `--json <PATH>` `--html <PATH>` salida custom
-- `--serve [ADDR]` default `0.0.0.0:8766` (usa `8766` para no pisar Koupper 8080)
-- `--help` `--version` via `clap`
 
-## Frontend independiente
-Ver `../audeep-web/README.md` (Vite + React 19 + TS + Chart.js). Consume `http://127.0.0.1:8766/json` polling 5s.
-```pwsh
-cd ../audeep-web; npm install; npm run dev # http://localhost:5173
+| Flag | Qué hace |
+|---|---|
+| *(nada)* | Hardware + descubrimiento + puertos + CVEs + reportes + historial |
+| `--no-scan` | Solo hardware local |
+| `--json <PATH>` / `--html <PATH>` | Rutas de salida |
+| `--history <PATH>` | Historial SQLite (default `audeep_history.db`) |
+| `--no-history` | No guardar ni comparar historial |
+| `--config <PATH>` | Config JSON (si no se pasa, usa `audeep.json` cuando existe) |
+| `--serve [ADDR]` | Servidor. Default `127.0.0.1:8766`; para el modo AP: `--serve 0.0.0.0:80` |
+| `--serve-interval <SECS>` | Validez del reporte cacheado (default 60) |
+| `--serve-token <TOKEN>` | Exige `?token=` o `X-Auth-Token` |
+| `--help` / `--version` | clap |
+
+## Config `audeep.json`
+
+```json
+{
+  "probe_timeout_ms": 400,
+  "concurrency": 64,
+  "mdns_timeout_ms": 1200,
+  "ports": [21, 22, 80, 443, 445, 3389],
+  "exclude": ["192.168.1.50"]
+}
 ```
+Todos los campos son opcionales; se validan y normalizan (puertos ordenados y sin repetidos, timeouts y concurrencia dentro de rango). Ver `audeep.example.json`.
 
-## Raspberry Pi / USB (ver `deploy/`)
+## Cómo decide (y por qué podés confiar)
+
+| Pregunta | Cómo se responde |
+|---|---|
+| ¿Está vivo? | Barrido ARP (prueba de capa 2 en los últimos segundos) → si no, TCP (abierto **o** RST) → si no, `ping` **solo** si la salida trae `TTL=` |
+| ¿Qué puertos? | 21 comunes (o los de la config), banner pasivo solo donde el servicio saluda primero |
+| ¿Es SMB1? | Negociación real del protocolo en el 445 (73 bytes, respuesta `\xFFSMB` vs `\xFESMB`) |
+| ¿Qué OpenSSH? | Producto + versión del banner contra rangos publicados por aviso |
+| ¿Qué tan seguro estoy? | `confirmado` (prueba activa), `probable` (lo declara el equipo), `sospecha` (solo el puerto) |
+| ¿Qué cambió? | Diff contra el escaneo anterior en `audeep_history.db` + anomalías L2 |
+
+## Seguridad del modo servidor
+
+- Escucha en **loopback** salvo que le pases una dirección explícita.
+- Si lo exponés en la LAN (`--serve 0.0.0.0:8766`), usá `--serve-token` y recordá que el reporte incluye el inventario completo de tu red.
+- Salud: `GET /health`. Forzar reescaneo: `GET /scan`. JSON: `GET /json`. Docs: `/docs` y `/docs/conceptos`.
+
+## Raspberry Pi / USB / Docker
+
 ```bash
-powershell -File scripts/build_rpi.ps1 # aarch64/armv7/musl 7.2-7.6MB
+powershell -File scripts/build_rpi.ps1          # aarch64 / armv7 / musl 7.2-7.6 MB
 scp target/aarch64-unknown-linux-gnu/release/audeep pi@pi:/tmp/
 ssh pi@pi 'sudo mv /tmp/audeep /usr/local/bin/ && sudo systemctl enable --now audeep'
-# AP: sudo audeep-ap on # AuDeep-Auditor 192.168.4.1 http://192.168.4.1
+sudo audeep-ap on                                # AuDeep-Auditor 192.168.4.1
 ```
 
-## Estructura limpia
+Docker: la imagen final es distroless y **no** trae `ping` ni `arp`, así que el descubrimiento baja a TCP puro; para el modo servidor usá `docker run --rm --network host audeep:latest --serve 0.0.0.0:8766`.
+
+## Estructura
+
 ```
-audeep/
-  Cargo.toml (workspace + xtask)
-  src/{main,hardware,network,scanner,vuln,report,serve}.rs
-  assets/{oui.json,oui_full.json(40k),vuln_db.json,cve.db}
-  xtask/src/main.rs (build-cve / fetch-nvd --limit 30 --merge)
-  .cargo/config.toml (alias xtask)
-  deploy/{systemd,usb,ap}  scripts/build_rpi.ps1
+src/main.rs      CLI y orquestación
+src/hardware.rs  CPU/RAM/discos/interfaces (con IPs) y sensores
+src/arp.rs       lectura y parseo multi-formato de la tabla ARP
+src/network.rs   barrido ARP-first, subred real, mDNS/SSDP, vendors con fuente
+src/scanner.rs   sondeo de 3 estados, banners y puertos activos
+src/probe.rs     negociación SMB1 y versiones SSH
+src/vuln.rs      base curada + SQLite (OnceLock), reglas y confianza
+src/risk.rs      score de riesgo por host
+src/history.rs   historial SQLite, diff y anomalías L2
+src/report.rs    JSON + HTML offline (riesgo, evidencia, eventos, CSV/JSONL)
+src/serve.rs     servidor HTTP con caché, ETag y token
+src/config.rs    audeep.json
 ```
-Best practices: `cargo fmt` + `clippy`, `serde` derive, `tokio` full, `sysinfo` 0.30, `clap` derive, `rusqlite bundled` + `mdns-sd`, `xtask` Rust puro (sin Python), `include_str!`/`include_bytes!` offline.
+
+## Tests y CI
+
+`cargo test` corre **39+ tests** de unidades sobre lo que importa: parseo de ARP en dos formatos y dos idiomas, matemática de subred, veredicto por TTL, clasificación de errores Winsock, ventana de SMB1, rangos de versión, reglas de vulnerabilidad, score de riesgo, diff del historial y escaping del reporte. GitHub Actions corre `fmt --check`, `clippy -D warnings` y `test` en Ubuntu y Windows.
 
 ## Docs
-- `docs/architecture.md` (versionado, migrado de `knowledge/dispositivo_auditor.md`) — arquitectura completa + diagrama + stack
-- In-site: `http://127.0.0.1:5111/` tab **Docs** y `http://127.0.0.1:8766/docs` (serve)
-- `deploy/ap/README.md` modo AP
-- `xtask fetch-nvd --help` NVD API 2.0 90d
+
+- `docs/architecture.md` — arquitectura y stack
+- `docs/conceptos.md` — referencia técnica con ejemplos reales
+- En vivo: `/docs` y `/docs/conceptos` desde `--serve`
+- `deploy/ap/README.md` — modo AP (hostapd + dnsmasq)
