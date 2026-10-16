@@ -25,6 +25,9 @@ pub struct VulnEntry {
     pub match_ports: Vec<u16>,
     #[serde(default)]
     pub match_versions: Vec<VersionRange>,
+    /// Certeza declarada del aviso. Si falta se deduce del tipo de regla.
+    #[serde(default)]
+    pub confidence: Option<String>,
     pub recommendation: String,
 }
 
@@ -35,6 +38,11 @@ pub struct Finding {
     pub port: u16,
     pub service: String,
     pub banner: Option<String>,
+    /// `confirmado` | `probable` | `sospecha`: distingue lo que se probo de lo
+    /// que solo se deduce del puerto abierto.
+    pub confidence: String,
+    /// Con que se sostiene el hallazgo (banner, version, negociacion activa).
+    pub evidence: Option<String>,
     pub description: String,
     pub recommendation: String,
 }
@@ -58,6 +66,7 @@ fn row_to_entry(row: &rusqlite::Row<'_>) -> rusqlite::Result<VulnEntry> {
         match_ports: serde_json::from_str(&ports_json).unwrap_or_default(),
         // La base SQLite no guarda rangos de version: los aporta el JSON curado.
         match_versions: Vec::new(),
+        confidence: None,
         recommendation: row.get(7)?,
     })
 }
@@ -164,6 +173,43 @@ fn version_matches(entry: &VulnEntry, banner: Option<&str>) -> bool {
     })
 }
 
+/// Certeza del hallazgo.
+///
+/// Si el aviso la declara se respeta; si no, se deduce: una coincidencia de
+/// banner o de version es "probable" (el banner lo declara el propio equipo) y
+/// un puerto abierto sin mas es "sospecha".
+fn confidence_for(entry: &VulnEntry, banner_match: bool, version_match: bool) -> &'static str {
+    if let Some(declared) = entry.confidence.as_deref() {
+        return match declared {
+            "confirmado" => "confirmado",
+            "probable" => "probable",
+            _ => "sospecha",
+        };
+    }
+    if banner_match || version_match {
+        "probable"
+    } else {
+        "sospecha"
+    }
+}
+
+/// Evidencia legible de por que se marco el hallazgo.
+fn evidence_for(port: &PortResult, banner_match: bool, version_match: bool) -> Option<String> {
+    let banner = port.banner.as_deref()?;
+    let first = banner.lines().next().unwrap_or(banner);
+    let short: String = first.chars().take(90).collect();
+    if banner.starts_with("SMB") {
+        return Some(format!("negociacion SMB real: {short}"));
+    }
+    if version_match {
+        return Some(format!("banner declara version afectada: {short}"));
+    }
+    if banner_match {
+        return Some(format!("banner coincide: {short}"));
+    }
+    None
+}
+
 pub fn check_port(port: &PortResult, db: &[VulnEntry]) -> Vec<Finding> {
     let mut findings = Vec::new();
     let banner_upper = port
@@ -200,6 +246,8 @@ pub fn check_port(port: &PortResult, db: &[VulnEntry]) -> Vec<Finding> {
                 port: port.port,
                 service: entry.service.clone(),
                 banner: port.banner.clone(),
+                confidence: confidence_for(entry, banner_match, version_match).to_string(),
+                evidence: evidence_for(port, banner_match, version_match),
                 description: entry.description.clone(),
                 recommendation: entry.recommendation.clone(),
             });
@@ -242,6 +290,36 @@ fn severity_rank(s: &str) -> u8 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn confidence_separates_confirmed_from_suspected() {
+        let smb1 = port(445, Some("SMB1 habilitado"), "SMB");
+        let f = check_port(&smb1, load_db())
+            .into_iter()
+            .find(|f| f.cve == "CVE-2017-0144")
+            .expect("SMB1 debe marcar EternalBlue");
+        assert_eq!(
+            f.confidence, "confirmado",
+            "la negociacion SMB1 es prueba activa"
+        );
+        assert!(f.evidence.as_deref().unwrap().contains("negociacion SMB"));
+
+        let rdp = port(3389, None, "RDP");
+        let f = check_port(&rdp, load_db())
+            .into_iter()
+            .find(|f| f.cve == "CVE-2019-0708")
+            .expect("RDP debe marcarse");
+        assert_eq!(f.confidence, "sospecha", "puerto solo no confirma version");
+        assert!(f.evidence.is_none(), "sin banner no hay evidencia");
+
+        let ssh = port(22, Some("SSH-2.0-OpenSSH_7.2p2"), "SSH");
+        let f = check_port(&ssh, load_db())
+            .into_iter()
+            .find(|f| f.cve == "CVE-2018-15473")
+            .expect("OpenSSH 7.2 debe marcarse");
+        assert_eq!(f.confidence, "probable");
+        assert!(f.evidence.as_deref().unwrap().contains("version afectada"));
+    }
 
     fn port(port: u16, banner: Option<&str>, hint: &str) -> PortResult {
         PortResult {

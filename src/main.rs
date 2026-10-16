@@ -106,7 +106,7 @@ async fn main() {
                         " | vulns: {}",
                         h.vulnerabilities
                             .iter()
-                            .map(|v| format!("{}({})", v.cve, v.severity))
+                            .map(|v| format!("{}({}/{})", v.cve, v.severity, v.confidence))
                             .collect::<Vec<_>>()
                             .join(", ")
                     )

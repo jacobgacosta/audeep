@@ -10,6 +10,7 @@
     "match_versions": [
       { "product": "OpenSSH", "min": "6.0", "max": "7.1" }
     ],
+    "confidence": "probable",
     "recommendation": "Actualizar OpenSSH y poner UseRoaming no en el cliente."
   },
   {
@@ -23,6 +24,7 @@
     "match_versions": [
       { "product": "OpenSSH", "min": "7.0", "max": "7.6" }
     ],
+    "confidence": "probable",
     "recommendation": "Actualizar OpenSSH a 7.7 o superior."
   },
   {
@@ -36,6 +38,7 @@
     "match_versions": [
       { "product": "OpenSSH", "min": "8.0", "max": "9.3" }
     ],
+    "confidence": "probable",
     "recommendation": "Actualizar OpenSSH y evitar AgentForwarding hacia hosts no confiables."
   },
   {
@@ -47,6 +50,7 @@
     "match_banner_contains": ["SMB1"],
     "match_ports": [445],
     "match_versions": [],
+    "confidence": "confirmado",
     "recommendation": "Deshabilitar SMBv1, aplicar MS17-010 y bloquear el 445 desde WAN."
   },
   {
@@ -58,6 +62,7 @@
     "match_banner_contains": [],
     "match_ports": [3389],
     "match_versions": [],
+    "confidence": "sospecha",
     "recommendation": "Aplicar el parche de BlueKeep, exigir NLA y no exponer RDP a Internet."
   },
   {
@@ -69,6 +74,7 @@
     "match_banner_contains": ["OpenSSL/1.0.1"],
     "match_ports": [],
     "match_versions": [],
+    "confidence": "probable",
     "recommendation": "Actualizar OpenSSL, rotar certificados y claves privadas."
   },
   {
@@ -80,6 +86,7 @@
     "match_banner_contains": ["Apache/2.4.49", "Apache/2.4.50"],
     "match_ports": [],
     "match_versions": [],
+    "confidence": "probable",
     "recommendation": "Actualizar Log4j a 2.17+ y bloquear egreso JNDI/LDAP."
   }
 ]
