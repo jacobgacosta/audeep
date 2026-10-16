@@ -1,4 +1,5 @@
 mod arp;
+mod config;
 mod hardware;
 mod history;
 mod network;
@@ -28,6 +29,10 @@ struct Args {
     #[arg(long)]
     no_history: bool,
 
+    /// Archivo de configuracion JSON (si no se pasa, usa audeep.json cuando existe)
+    #[arg(long, value_name = "PATH")]
+    config: Option<PathBuf>,
+
     /// Ruta JSON de salida (ej. --json=out.json)
     #[arg(long, value_name = "PATH")]
     json: Option<PathBuf>,
@@ -53,6 +58,27 @@ struct Args {
 #[tokio::main]
 async fn main() {
     let args = Args::parse();
+
+    // Configuracion: audeep.json del directorio actual, o el archivo de --config.
+    let cfg = match config::AuditConfig::load(args.config.as_deref()) {
+        Ok((cfg, fuente)) => {
+            if let Some(f) = fuente {
+                println!(
+                    "Config: {} ({} puertos, timeout {} ms, {} tareas)",
+                    f.display(),
+                    cfg.ports.len(),
+                    cfg.probe_timeout_ms,
+                    cfg.concurrency
+                );
+            }
+            cfg
+        }
+        Err(e) => {
+            eprintln!("Config invalida ({e}): se usan los valores por defecto");
+            config::AuditConfig::default()
+        }
+    };
+    scanner::set_ports(cfg.ports.clone());
 
     if let Some(addr) = args.serve {
         let opts = serve::ServeOptions {
@@ -95,12 +121,24 @@ async fn main() {
     if do_scan {
         if subnet.is_some() {
             println!(
-                "Escaneando red local (puede tardar 20-60s, timeout 400ms, 64 tareas paralelas)..."
+                "Escaneando red local ({} puertos, timeout {} ms, {} tareas paralelas)...",
+                cfg.ports.len(),
+                cfg.probe_timeout_ms,
+                cfg.concurrency
             );
             let start = Instant::now();
-            let mut discovered = network::discover_hosts(network::PROBE_TIMEOUT_MS, 64).await;
+            let mut discovered =
+                network::discover_hosts(cfg.probe_timeout_ms, cfg.concurrency).await;
             discovered = network::enrich_with_arp(discovered).await;
-            discovered = network::enrich_with_mdns_ssdp(discovered, 1200).await;
+            discovered = network::enrich_with_mdns_ssdp(discovered, cfg.mdns_timeout_ms).await;
+            if !cfg.exclude.is_empty() {
+                let antes = discovered.len();
+                discovered.retain(|h| !cfg.exclude.iter().any(|e| e == &h.ip));
+                let quitados = antes - discovered.len();
+                if quitados > 0 {
+                    println!("Excluidos por config: {quitados} hosts");
+                }
+            }
             duration_secs = start.elapsed().as_secs_f64();
             println!("Hosts vivos: {}", discovered.len());
             for h in &discovered {

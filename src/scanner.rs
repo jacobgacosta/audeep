@@ -201,9 +201,27 @@ pub async fn scan_target(ip: IpAddr, ports: &[u16], timeout_ms: u64) -> Vec<Port
     opens
 }
 
-/// Escanea todos los COMMON_PORTS
+/// Override de puertos cargado desde la config (se setea una vez, al arrancar).
+static PORT_OVERRIDE: std::sync::OnceLock<Vec<u16>> = std::sync::OnceLock::new();
+
+/// Lista de puertos activa: la de la config si se seteo, si no COMMON_PORTS.
+pub fn active_ports() -> &'static [u16] {
+    PORT_OVERRIDE
+        .get()
+        .map(|v| v.as_slice())
+        .unwrap_or(COMMON_PORTS)
+}
+
+/// Fija la lista de puertos a escanear (ignora listas vacias).
+pub fn set_ports(ports: Vec<u16>) {
+    if !ports.is_empty() {
+        let _ = PORT_OVERRIDE.set(ports);
+    }
+}
+
+/// Escanea los puertos activos (`audeep.json` o COMMON_PORTS)
 pub async fn scan_common_ports(ip: IpAddr, timeout_ms: u64) -> Vec<PortResult> {
-    scan_target(ip, COMMON_PORTS, timeout_ms).await
+    scan_target(ip, active_ports(), timeout_ms).await
 }
 
 #[cfg(test)]
