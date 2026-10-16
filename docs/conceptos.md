@@ -128,7 +128,7 @@ esac
 
 **Qué es:** acceso remoto cifrado al shell. Autenticación por password (lo que usas: `root123`) o por llave (`~/.ssh`, sin password tras `ssh-copy-id`).
 
-**Para qué sirve aquí:** así entro a tu Jetson (`jetson-orin-nano@192.168.1.21`) a ejecutar diagnósticos. El banner `SSH-2.0-OpenSSH_*` ya dice versión de OpenSSH, útil para CVEs de SSH. Buenas prácticas: llave + deshabilitar `root` + cambiar passwords.
+**Para qué sirve aquí:** así entro a tu Jetson (`jetson-dev@192.168.1.21`) a ejecutar diagnósticos. El banner `SSH-2.0-OpenSSH_*` ya dice versión de OpenSSH, útil para CVEs de SSH. Buenas prácticas: llave + deshabilitar `root` + cambiar passwords.
 
 ---
 

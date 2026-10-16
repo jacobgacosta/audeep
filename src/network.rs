@@ -29,7 +29,8 @@ fn oui_db() -> &'static HashMap<String, String> {
     static CACHE: OnceLock<HashMap<String, String>> = OnceLock::new();
     CACHE.get_or_init(|| {
         // Intentar full primero, fallback a small
-        let mut map: HashMap<String, String> = serde_json::from_str(OUI_JSON_FULL).unwrap_or_default();
+        let mut map: HashMap<String, String> =
+            serde_json::from_str(OUI_JSON_FULL).unwrap_or_default();
         if map.is_empty() {
             map = serde_json::from_str(OUI_JSON_SMALL).unwrap_or_default();
         } else {
@@ -62,7 +63,9 @@ pub fn lookup_vendor(mac: &str) -> Option<String> {
         if first_octet.len() == 2 {
             if let Ok(byte) = u8::from_str_radix(first_octet, 16) {
                 if byte & 0x02 != 0 {
-                    return Some("Virtual — MAC local, marca real oculta (ver mDNS/hostname)".to_string());
+                    return Some(
+                        "Virtual — MAC local, marca real oculta (ver mDNS/hostname)".to_string(),
+                    );
                 }
             }
         }
@@ -71,12 +74,40 @@ pub fn lookup_vendor(mac: &str) -> Option<String> {
 }
 
 fn infer_vendor_from_host(h: &HostInfo) -> Option<String> {
-    let lower_host = h.hostname.as_ref().map(|s| s.to_lowercase()).unwrap_or_default();
-    let mdns_lower = h.mdns_names.iter().map(|s| s.to_lowercase()).collect::<Vec<_>>().join(" ");
-    let ssdp_lower = h.ssdp_location.as_ref().map(|s| s.to_lowercase()).unwrap_or_default();
-    let banner_lower = h.open_ports.iter().filter_map(|p| p.banner.as_ref()).map(|b| b.to_lowercase()).collect::<Vec<_>>().join(" ");
-    let service_lower = h.open_ports.iter().filter_map(|p| p.service_hint.as_ref()).map(|s| s.to_lowercase()).collect::<Vec<_>>().join(" ");
-    let all = format!("{} {} {} {} {} {}", lower_host, mdns_lower, ssdp_lower, banner_lower, service_lower, h.ip);
+    let lower_host = h
+        .hostname
+        .as_ref()
+        .map(|s| s.to_lowercase())
+        .unwrap_or_default();
+    let mdns_lower = h
+        .mdns_names
+        .iter()
+        .map(|s| s.to_lowercase())
+        .collect::<Vec<_>>()
+        .join(" ");
+    let ssdp_lower = h
+        .ssdp_location
+        .as_ref()
+        .map(|s| s.to_lowercase())
+        .unwrap_or_default();
+    let banner_lower = h
+        .open_ports
+        .iter()
+        .filter_map(|p| p.banner.as_ref())
+        .map(|b| b.to_lowercase())
+        .collect::<Vec<_>>()
+        .join(" ");
+    let service_lower = h
+        .open_ports
+        .iter()
+        .filter_map(|p| p.service_hint.as_ref())
+        .map(|s| s.to_lowercase())
+        .collect::<Vec<_>>()
+        .join(" ");
+    let all = format!(
+        "{} {} {} {} {} {}",
+        lower_host, mdns_lower, ssdp_lower, banner_lower, service_lower, h.ip
+    );
     // Extracción real: buscar indicios en banners/mDNS/hostname/SSDP, sin hardcode de IP
     if all.contains("jetson") || all.contains("tegra") {
         return Some("NVIDIA Jetson (deducido por banner/mDNS)".to_string());
@@ -90,7 +121,11 @@ fn infer_vendor_from_host(h: &HostInfo) -> Option<String> {
     if all.contains("espressif") || all.contains("esp32") || all.contains("esp8266") {
         return Some("Espressif (deducido)".to_string());
     }
-    if all.contains("raspberry") || all.contains("rpi") || all.contains("bcm27") || all.contains("bcm28") {
+    if all.contains("raspberry")
+        || all.contains("rpi")
+        || all.contains("bcm27")
+        || all.contains("bcm28")
+    {
         return Some("Raspberry Pi (deducido por mDNS/hostname/banner)".to_string());
     }
     if !h.mdns_names.is_empty() {
@@ -104,7 +139,10 @@ async fn http_infer_vendor(ip: &str) -> Option<String> {
     // Intento real HTTP GET a 80/8080 con timeout 700ms, busca Jetson/RPi en headers/body
     for port in [80, 8080, 8000] {
         let url = format!("http://{}:{}/", ip, port);
-        let client = match reqwest::Client::builder().timeout(std::time::Duration::from_millis(700)).build() {
+        let client = match reqwest::Client::builder()
+            .timeout(std::time::Duration::from_millis(700))
+            .build()
+        {
             Ok(c) => c,
             Err(_) => continue,
         };
@@ -112,7 +150,10 @@ async fn http_infer_vendor(ip: &str) -> Option<String> {
             let headers = format!("{:?}", resp.headers()).to_lowercase();
             let text = resp.text().await.unwrap_or_default().to_lowercase();
             let all = format!("{} {}", headers, text);
-            if all.contains("jetson") || all.contains("tegra") || (all.contains("nvidia") && all.contains("l4t")) {
+            if all.contains("jetson")
+                || all.contains("tegra")
+                || (all.contains("nvidia") && all.contains("l4t"))
+            {
                 return Some("NVIDIA Jetson (deducido por HTTP)".to_string());
             }
             if all.contains("raspberry") || all.contains("rpi") {
@@ -154,10 +195,14 @@ pub fn hosts_in_subnet(ip: Ipv4Addr, prefix_len: u8) -> Vec<Ipv4Addr> {
     if prefix_len != 24 {
         // fallback a /24
         let base = Ipv4Addr::new(ip.octets()[0], ip.octets()[1], ip.octets()[2], 0);
-        return (1..254).map(|i| Ipv4Addr::new(base.octets()[0], base.octets()[1], base.octets()[2], i)).collect();
+        return (1..254)
+            .map(|i| Ipv4Addr::new(base.octets()[0], base.octets()[1], base.octets()[2], i))
+            .collect();
     }
     let base = Ipv4Addr::new(ip.octets()[0], ip.octets()[1], ip.octets()[2], 0);
-    (1..254).map(|i| Ipv4Addr::new(base.octets()[0], base.octets()[1], base.octets()[2], i)).collect()
+    (1..254)
+        .map(|i| Ipv4Addr::new(base.octets()[0], base.octets()[1], base.octets()[2], i))
+        .collect()
 }
 
 async fn is_host_alive(ip: IpAddr, timeout_ms: u64) -> (bool, Option<u128>) {
@@ -209,7 +254,9 @@ async fn ping_host(ip: IpAddr, timeout_ms: u64) -> bool {
                 let stdout = String::from_utf8_lossy(&out.stdout);
                 // Si no hay TTL, no es reply real (ej. 100% loss pero exit 0 en algunos casos)
                 // Pero ya filtramos por success, que en Windows es confiable (0 solo con TTL)
-                return stdout.contains("TTL=") || stdout.contains("ttl=") || !stdout.contains("Request timed out") && !stdout.contains("100% loss");
+                return stdout.contains("TTL=")
+                    || stdout.contains("ttl=")
+                    || !stdout.contains("Request timed out") && !stdout.contains("100% loss");
             }
             false
         }
@@ -264,7 +311,7 @@ pub async fn discover_hosts(timeout_ms: u64, max_concurrency: usize) -> Vec<Host
                 let open_ports = scanner::scan_common_ports(IpAddr::V4(ip), timeout_ms).await;
                 let vulnerabilities = crate::vuln::check_host(&open_ports);
                 let hostname = try_resolve_hostname(IpAddr::V4(ip)).await;
-                    HostInfo {
+                HostInfo {
                     ip: ip.to_string(),
                     hostname,
                     mac: None,
@@ -470,7 +517,9 @@ pub async fn discover_mdns_map(timeout_ms: u64) -> HashMap<String, Vec<String>> 
                             let fullname = info.get_fullname().trim_end_matches('.').to_string();
                             if fullname != hostname {
                                 if let Some(v) = map.get_mut(&addr.to_string()) {
-                                    if !v.contains(&fullname) { v.push(fullname.clone()); }
+                                    if !v.contains(&fullname) {
+                                        v.push(fullname.clone());
+                                    }
                                 }
                             }
                         }
@@ -503,12 +552,18 @@ pub async fn discover_ssdp_map(timeout_ms: u64) -> HashMap<String, String> {
         tokio::time::sleep(std::time::Duration::from_millis(400)).await;
         let _ = s2.send_to(msearch, "239.255.255.250:1900").await;
     });
-    let deadline = tokio::time::Instant::now() + std::time::Duration::from_millis(timeout_ms.min(3000));
+    let deadline =
+        tokio::time::Instant::now() + std::time::Duration::from_millis(timeout_ms.min(3000));
     let mut buf = vec![0u8; 2048];
     while tokio::time::Instant::now() < deadline {
         let remaining = deadline - tokio::time::Instant::now();
         let recv_fut = sock_clone.recv_from(&mut buf);
-        match tokio::time::timeout(remaining.min(std::time::Duration::from_millis(400)), recv_fut).await {
+        match tokio::time::timeout(
+            remaining.min(std::time::Duration::from_millis(400)),
+            recv_fut,
+        )
+        .await
+        {
             Ok(Ok((n, peer))) => {
                 let text = String::from_utf8_lossy(&buf[..n]);
                 let mut location = None;
@@ -519,12 +574,16 @@ pub async fn discover_ssdp_map(timeout_ms: u64) -> HashMap<String, String> {
                         location = Some(l[9..].trim().to_string());
                     } else if l.to_uppercase().starts_with("SERVER:") {
                         server = Some(l[7..].trim().to_string());
-                    } else if l.to_uppercase().starts_with("ST:") || l.to_uppercase().starts_with("NT:") {
+                    } else if l.to_uppercase().starts_with("ST:")
+                        || l.to_uppercase().starts_with("NT:")
+                    {
                         // service type, podría usarse para vendor
                     }
                 }
                 let ip = peer.ip().to_string();
-                let val = location.or(server).unwrap_or_else(|| text.lines().next().unwrap_or("").to_string());
+                let val = location
+                    .or(server)
+                    .unwrap_or_else(|| text.lines().next().unwrap_or("").to_string());
                 if !val.is_empty() {
                     map.entry(ip).or_insert(val);
                 }
@@ -537,8 +596,10 @@ pub async fn discover_ssdp_map(timeout_ms: u64) -> HashMap<String, String> {
 
 pub async fn enrich_with_mdns_ssdp(mut hosts: Vec<HostInfo>, timeout_ms: u64) -> Vec<HostInfo> {
     // Ejecutar mDNS y SSDP en paralelo
-    let (mdns_map, ssdp_map) = tokio::join!(discover_mdns_map(timeout_ms), discover_ssdp_map(timeout_ms));
-    let existing_ips: std::collections::HashSet<String> = hosts.iter().map(|h| h.ip.clone()).collect();
+    let (mdns_map, ssdp_map) =
+        tokio::join!(discover_mdns_map(timeout_ms), discover_ssdp_map(timeout_ms));
+    let existing_ips: std::collections::HashSet<String> =
+        hosts.iter().map(|h| h.ip.clone()).collect();
     // Enriquecer hosts existentes
     for h in &mut hosts {
         if let Some(names) = mdns_map.get(&h.ip) {
@@ -551,11 +612,19 @@ pub async fn enrich_with_mdns_ssdp(mut hosts: Vec<HostInfo>, timeout_ms: u64) ->
             h.ssdp_location = Some(loc.clone());
         }
         // Si vendor es Virtual/Locally o None, inferir por mDNS/hostname/SSDP/banners y HTTP real
-        let needs_infer = h.vendor.is_none() || h.vendor.as_ref().map(|v| v.contains("Virtual") || v.contains("Locally")).unwrap_or(false);
+        let needs_infer = h.vendor.is_none()
+            || h.vendor
+                .as_ref()
+                .map(|v| v.contains("Virtual") || v.contains("Locally"))
+                .unwrap_or(false);
         if needs_infer {
             if let Some(inferred) = infer_vendor_from_host(h) {
                 h.vendor = Some(inferred);
-            } else if h.open_ports.iter().any(|p| p.port==80 || p.port==8080 || p.port==8000) {
+            } else if h
+                .open_ports
+                .iter()
+                .any(|p| p.port == 80 || p.port == 8080 || p.port == 8000)
+            {
                 if let Some(http_v) = http_infer_vendor(&h.ip).await {
                     h.vendor = Some(http_v);
                 }
@@ -564,15 +633,25 @@ pub async fn enrich_with_mdns_ssdp(mut hosts: Vec<HostInfo>, timeout_ms: u64) ->
     }
     // Añadir hosts descubiertos solo por mDNS/SSDP que no estaban en lista (ej. impresoras silenciosas)
     for (ip, names) in mdns_map {
-        if existing_ips.contains(&ip) { continue; }
-        if ip.parse::<IpAddr>().is_err() { continue; }
-        if ip.starts_with("224.") || ip.starts_with("239.") { continue; }
-        if ip.ends_with(".0") || ip.ends_with(".255") { continue; }
+        if existing_ips.contains(&ip) {
+            continue;
+        }
+        if ip.parse::<IpAddr>().is_err() {
+            continue;
+        }
+        if ip.starts_with("224.") || ip.starts_with("239.") {
+            continue;
+        }
+        if ip.ends_with(".0") || ip.ends_with(".255") {
+            continue;
+        }
         if let Some(local) = get_local_ipv4() {
             if let Ok(parsed) = ip.parse::<Ipv4Addr>() {
                 let lo = local.octets();
                 let o = parsed.octets();
-                if o[0]!=lo[0] || o[1]!=lo[1] || o[2]!=lo[2] { continue; }
+                if o[0] != lo[0] || o[1] != lo[1] || o[2] != lo[2] {
+                    continue;
+                }
             }
         }
         let hostname = names.first().cloned();
@@ -590,16 +669,28 @@ pub async fn enrich_with_mdns_ssdp(mut hosts: Vec<HostInfo>, timeout_ms: u64) ->
         });
     }
     for (ip, loc) in ssdp_map {
-        if existing_ips.contains(&ip) { continue; }
-        if hosts.iter().any(|h| h.ip==ip) { continue; }
-        if ip.parse::<IpAddr>().is_err() { continue; }
-        if ip.starts_with("224.") || ip.starts_with("239.") { continue; }
-        if ip.ends_with(".0") || ip.ends_with(".255") { continue; }
+        if existing_ips.contains(&ip) {
+            continue;
+        }
+        if hosts.iter().any(|h| h.ip == ip) {
+            continue;
+        }
+        if ip.parse::<IpAddr>().is_err() {
+            continue;
+        }
+        if ip.starts_with("224.") || ip.starts_with("239.") {
+            continue;
+        }
+        if ip.ends_with(".0") || ip.ends_with(".255") {
+            continue;
+        }
         if let Some(local) = get_local_ipv4() {
             if let Ok(parsed) = ip.parse::<Ipv4Addr>() {
                 let lo = local.octets();
                 let o = parsed.octets();
-                if o[0]!=lo[0] || o[1]!=lo[1] || o[2]!=lo[2] { continue; }
+                if o[0] != lo[0] || o[1] != lo[1] || o[2] != lo[2] {
+                    continue;
+                }
             }
         }
         hosts.push(HostInfo {

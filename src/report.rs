@@ -23,7 +23,12 @@ pub struct NetworkSummary {
 }
 
 impl AuditReport {
-    pub fn new(hardware: HardwareReport, hosts: Vec<HostInfo>, local_subnet: Option<String>, duration_secs: f64) -> Self {
+    pub fn new(
+        hardware: HardwareReport,
+        hosts: Vec<HostInfo>,
+        local_subnet: Option<String>,
+        duration_secs: f64,
+    ) -> Self {
         let total = hosts.len();
         let total_vulns = hosts.iter().map(|h| h.vulnerabilities.len()).sum();
         Self {
@@ -117,17 +122,31 @@ impl AuditReport {
             )
         }).collect::<Vec<_>>().join("\n");
 
-        let net_ifaces = self.hardware.network_interfaces.iter().map(|n| {
-            format!("<tr><td>{}</td><td>{}</td></tr>", html_escape(&n.name), html_escape(&n.mac))
-        }).collect::<Vec<_>>().join("\n");
+        let net_ifaces = self
+            .hardware
+            .network_interfaces
+            .iter()
+            .map(|n| {
+                format!(
+                    "<tr><td>{}</td><td>{}</td></tr>",
+                    html_escape(&n.name),
+                    html_escape(&n.mac)
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
 
         let sensors_rows = if self.hardware.sensors.is_empty() {
             "<tr><td colspan='4' class='muted'>No se detectaron sensores (normal en Windows/VM)</td></tr>".to_string()
         } else {
-            self.hardware.sensors
+            self.hardware
+                .sensors
                 .iter()
                 .map(|s| {
-                    let crit = s.critical_c.map(|c| format!("{:.1}°C", c)).unwrap_or_else(|| "—".to_string());
+                    let crit = s
+                        .critical_c
+                        .map(|c| format!("{:.1}°C", c))
+                        .unwrap_or_else(|| "—".to_string());
                     format!(
                         "<tr><td>{}</td><td>{:.1}°C</td><td>{:.1}°C</td><td>{}</td></tr>",
                         html_escape(&s.label),
@@ -140,14 +159,22 @@ impl AuditReport {
                 .join("\n")
         };
 
-        let subnet = self.network.local_subnet.clone().unwrap_or_else(|| "no detectada".to_string());
-        let oui_count: usize = serde_json::from_str::<std::collections::HashMap<String, String>>(include_str!("../assets/oui_full.json"))
+        let subnet = self
+            .network
+            .local_subnet
+            .clone()
+            .unwrap_or_else(|| "no detectada".to_string());
+        let oui_count: usize = serde_json::from_str::<std::collections::HashMap<String, String>>(
+            include_str!("../assets/oui_full.json"),
+        )
+        .map(|m| m.len())
+        .unwrap_or_else(|_| {
+            serde_json::from_str::<std::collections::HashMap<String, String>>(include_str!(
+                "../assets/oui.json"
+            ))
             .map(|m| m.len())
-            .unwrap_or_else(|_| {
-                serde_json::from_str::<std::collections::HashMap<String, String>>(include_str!("../assets/oui.json"))
-                    .map(|m| m.len())
-                    .unwrap_or(0)
-            });
+            .unwrap_or(0)
+        });
         let cve_count = crate::vuln::load_db().len();
 
         // Chart data computed in Rust for JS
@@ -155,22 +182,45 @@ impl AuditReport {
         let mut port_counts: HashMap<String, usize> = HashMap::new();
         let mut sev_counts: HashMap<String, usize> = HashMap::new();
         for h in &self.hosts {
-            let v = h.vendor.clone().unwrap_or_else(|| "Desconocido".to_string());
+            let v = h
+                .vendor
+                .clone()
+                .unwrap_or_else(|| "Desconocido".to_string());
             *vendor_counts.entry(v).or_insert(0) += 1;
-            for p in &h.open_ports { *port_counts.entry(p.port.to_string()).or_insert(0) += 1; }
-            for vuln in &h.vulnerabilities { *sev_counts.entry(vuln.severity.clone()).or_insert(0) +=1; }
+            for p in &h.open_ports {
+                *port_counts.entry(p.port.to_string()).or_insert(0) += 1;
+            }
+            for vuln in &h.vulnerabilities {
+                *sev_counts.entry(vuln.severity.clone()).or_insert(0) += 1;
+            }
         }
         let mut vendor_sorted: Vec<_> = vendor_counts.into_iter().collect();
-        vendor_sorted.sort_by(|a,b| b.1.cmp(&a.1));
+        vendor_sorted.sort_by(|a, b| b.1.cmp(&a.1));
         vendor_sorted.truncate(6);
         let mut port_sorted: Vec<_> = port_counts.into_iter().collect();
-        port_sorted.sort_by(|a,b| b.1.cmp(&a.1));
+        port_sorted.sort_by(|a, b| b.1.cmp(&a.1));
         port_sorted.truncate(8);
 
-        let vendor_labels = vendor_sorted.iter().map(|(k,_)| html_escape(k)).collect::<Vec<_>>().join("|");
-        let vendor_vals = vendor_sorted.iter().map(|(_,v)| v.to_string()).collect::<Vec<_>>().join(",");
-        let port_labels = port_sorted.iter().map(|(k,_)| k.clone()).collect::<Vec<_>>().join(",");
-        let port_vals = port_sorted.iter().map(|(_,v)| v.to_string()).collect::<Vec<_>>().join(",");
+        let vendor_labels = vendor_sorted
+            .iter()
+            .map(|(k, _)| html_escape(k))
+            .collect::<Vec<_>>()
+            .join("|");
+        let vendor_vals = vendor_sorted
+            .iter()
+            .map(|(_, v)| v.to_string())
+            .collect::<Vec<_>>()
+            .join(",");
+        let port_labels = port_sorted
+            .iter()
+            .map(|(k, _)| k.clone())
+            .collect::<Vec<_>>()
+            .join(",");
+        let port_vals = port_sorted
+            .iter()
+            .map(|(_, v)| v.to_string())
+            .collect::<Vec<_>>()
+            .join(",");
         let sev_crit = sev_counts.get("critica").cloned().unwrap_or(0);
         let sev_alta = sev_counts.get("alta").cloned().unwrap_or(0);
         let sev_media = sev_counts.get("media").cloned().unwrap_or(0);
@@ -181,7 +231,8 @@ impl AuditReport {
         // Escape for html
         let data_json_escaped = data_json.replace("</", "<\\/");
 
-        let base = format!(r#"<!DOCTYPE html>
+        let base = format!(
+            r#"<!DOCTYPE html>
 <html lang="es">
 <head>
 <meta charset="utf-8">
@@ -275,42 +326,49 @@ footer{{color:var(--muted); font-size:11px; text-align:center; padding:16px; fon
 </div>
 <footer>AuDeep v0.1.0 · Rust · Offline-first · <span id="footTime"></span> · Hecho con 🦀</footer>
 "#,
-        self.generated_at.format("%Y-%m-%d %H:%M:%S UTC"),
-        html_escape(&subnet),
-        self.network.total_hosts_alive,
-        self.network.total_vulnerabilities,
-        self.network.scan_duration_secs,
-        self.network.total_hosts_alive,
-        self.network.total_vulnerabilities,
-        vendor_sorted.len(),
-        port_sorted.len(),
-        html_escape(&self.hardware.hostname),
-        html_escape(&self.hardware.os_name),
-        html_escape(&self.hardware.os_version),
-        html_escape(&self.hardware.kernel_version),
-        html_escape(&self.hardware.cpu.brand),
-        self.hardware.cpu.cores_physical.unwrap_or(0),
-        self.hardware.cpu.cores_logical,
-        self.hardware.cpu.frequency_mhz,
-        html_escape(&self.hardware.cpu.vendor),
-        self.hardware.memory.used_gb,
-        self.hardware.memory.total_gb,
-        self.hardware.memory.available_gb,
-        self.hardware.uptime_secs,
-        self.hardware.load_avg_one,
-        self.hardware.load_avg_five,
-        self.hardware.load_avg_fifteen,
-        self.hardware.sensors.len(),
-        sev_crit, sev_alta, sev_media, sev_baja,
-        disks_rows,
-        net_ifaces,
-        sensors_rows,
-        self.hosts.len(),
-        self.network.total_vulnerabilities,
-        oui_count,
-        cve_count,
-        hosts_rows,
-        crate::scanner::COMMON_PORTS.iter().map(|p| p.to_string()).collect::<Vec<_>>().join(", ")
+            self.generated_at.format("%Y-%m-%d %H:%M:%S UTC"),
+            html_escape(&subnet),
+            self.network.total_hosts_alive,
+            self.network.total_vulnerabilities,
+            self.network.scan_duration_secs,
+            self.network.total_hosts_alive,
+            self.network.total_vulnerabilities,
+            vendor_sorted.len(),
+            port_sorted.len(),
+            html_escape(&self.hardware.hostname),
+            html_escape(&self.hardware.os_name),
+            html_escape(&self.hardware.os_version),
+            html_escape(&self.hardware.kernel_version),
+            html_escape(&self.hardware.cpu.brand),
+            self.hardware.cpu.cores_physical.unwrap_or(0),
+            self.hardware.cpu.cores_logical,
+            self.hardware.cpu.frequency_mhz,
+            html_escape(&self.hardware.cpu.vendor),
+            self.hardware.memory.used_gb,
+            self.hardware.memory.total_gb,
+            self.hardware.memory.available_gb,
+            self.hardware.uptime_secs,
+            self.hardware.load_avg_one,
+            self.hardware.load_avg_five,
+            self.hardware.load_avg_fifteen,
+            self.hardware.sensors.len(),
+            sev_crit,
+            sev_alta,
+            sev_media,
+            sev_baja,
+            disks_rows,
+            net_ifaces,
+            sensors_rows,
+            self.hosts.len(),
+            self.network.total_vulnerabilities,
+            oui_count,
+            cve_count,
+            hosts_rows,
+            crate::scanner::COMMON_PORTS
+                .iter()
+                .map(|p| p.to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
         );
 
         // JS para Charts + Filtros + Live

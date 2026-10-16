@@ -47,7 +47,44 @@ fn load_db_from_sqlite_bytes(bytes: &[u8]) -> Option<Vec<VulnEntry>> {
         f.write_all(bytes).ok()?;
         let conn = Connection::open(&tmp).ok()?;
         let mut stmt = conn.prepare("SELECT cve, severity, service, affected, description, match_banner_contains, match_ports, recommendation FROM vulnerabilities").ok()?;
-        let rows = stmt.query_map([], |row| {
+        let rows = stmt
+            .query_map([], |row| {
+                let banner_json: String = row.get(5)?;
+                let ports_json: String = row.get(6)?;
+                let banners: Vec<String> = serde_json::from_str(&banner_json).unwrap_or_default();
+                let ports: Vec<u16> = serde_json::from_str(&ports_json).unwrap_or_default();
+                Ok(VulnEntry {
+                    cve: row.get(0)?,
+                    severity: row.get(1)?,
+                    service: row.get(2)?,
+                    affected: row.get(3)?,
+                    description: row.get(4)?,
+                    match_banner_contains: banners,
+                    match_ports: ports,
+                    recommendation: row.get(7)?,
+                })
+            })
+            .ok()?;
+        let mut out = Vec::new();
+        for r in rows.flatten() {
+            out.push(r);
+        }
+        if out.is_empty() { None } else { Some(out) }
+    };
+    let res = try_open();
+    let _ = std::fs::remove_file(&tmp);
+    res
+}
+
+fn load_db_from_sqlite_file(path: &std::path::Path) -> Option<Vec<VulnEntry>> {
+    use rusqlite::Connection;
+    if !path.exists() {
+        return None;
+    }
+    let conn = Connection::open(path).ok()?;
+    let mut stmt = conn.prepare("SELECT cve, severity, service, affected, description, match_banner_contains, match_ports, recommendation FROM vulnerabilities").ok()?;
+    let rows = stmt
+        .query_map([], |row| {
             let banner_json: String = row.get(5)?;
             let ports_json: String = row.get(6)?;
             let banners: Vec<String> = serde_json::from_str(&banner_json).unwrap_or_default();
@@ -62,39 +99,12 @@ fn load_db_from_sqlite_bytes(bytes: &[u8]) -> Option<Vec<VulnEntry>> {
                 match_ports: ports,
                 recommendation: row.get(7)?,
             })
-        }).ok()?;
-        let mut out = Vec::new();
-        for r in rows.flatten() { out.push(r); }
-        if out.is_empty() { None } else { Some(out) }
-    };
-    let res = try_open();
-    let _ = std::fs::remove_file(&tmp);
-    res
-}
-
-fn load_db_from_sqlite_file(path: &std::path::Path) -> Option<Vec<VulnEntry>> {
-    use rusqlite::Connection;
-    if !path.exists() { return None; }
-    let conn = Connection::open(path).ok()?;
-    let mut stmt = conn.prepare("SELECT cve, severity, service, affected, description, match_banner_contains, match_ports, recommendation FROM vulnerabilities").ok()?;
-    let rows = stmt.query_map([], |row| {
-        let banner_json: String = row.get(5)?;
-        let ports_json: String = row.get(6)?;
-        let banners: Vec<String> = serde_json::from_str(&banner_json).unwrap_or_default();
-        let ports: Vec<u16> = serde_json::from_str(&ports_json).unwrap_or_default();
-        Ok(VulnEntry {
-            cve: row.get(0)?,
-            severity: row.get(1)?,
-            service: row.get(2)?,
-            affected: row.get(3)?,
-            description: row.get(4)?,
-            match_banner_contains: banners,
-            match_ports: ports,
-            recommendation: row.get(7)?,
         })
-    }).ok()?;
+        .ok()?;
     let mut out = Vec::new();
-    for r in rows.flatten() { out.push(r); }
+    for r in rows.flatten() {
+        out.push(r);
+    }
     if out.is_empty() { None } else { Some(out) }
 }
 
@@ -103,16 +113,25 @@ pub fn load_db() -> Vec<VulnEntry> {
     if let Ok(exe) = std::env::current_exe() {
         if let Some(dir) = exe.parent() {
             for cand in [dir.join("cve.db"), dir.join("assets/cve.db")] {
-                if let Some(v) = load_db_from_sqlite_file(&cand) { return v; }
+                if let Some(v) = load_db_from_sqlite_file(&cand) {
+                    return v;
+                }
             }
         }
     }
     // 2) Intenta assets/cve.db en cwd (dev)
-    for cand in [std::path::Path::new("assets/cve.db"), std::path::Path::new("cve.db")] {
-        if let Some(v) = load_db_from_sqlite_file(cand) { return v; }
+    for cand in [
+        std::path::Path::new("assets/cve.db"),
+        std::path::Path::new("cve.db"),
+    ] {
+        if let Some(v) = load_db_from_sqlite_file(cand) {
+            return v;
+        }
     }
     // 3) Intenta bytes embebidos
-    if let Some(v) = load_db_from_sqlite_bytes(DB_SQLITE_BYTES) { return v; }
+    if let Some(v) = load_db_from_sqlite_bytes(DB_SQLITE_BYTES) {
+        return v;
+    }
     // 4) Fallback JSON embebido
     serde_json::from_str(DB_JSON).unwrap_or_default()
 }
@@ -142,7 +161,8 @@ pub fn query_sqlite(sql: &str) -> Result<Vec<VulnEntry>, String> {
                                 service: row.get(2).unwrap_or_default(),
                                 affected: row.get(3).unwrap_or_default(),
                                 description: row.get(4).unwrap_or_default(),
-                                match_banner_contains: serde_json::from_str(&bj).unwrap_or_default(),
+                                match_banner_contains: serde_json::from_str(&bj)
+                                    .unwrap_or_default(),
                                 match_ports: serde_json::from_str(&pj).unwrap_or_default(),
                                 recommendation: row.get(7).unwrap_or_default(),
                             })
@@ -163,7 +183,10 @@ pub fn query_sqlite(sql: &str) -> Result<Vec<VulnEntry>, String> {
     // Fallback en memoria: parse simple WHERE service='X'
     if sql.to_uppercase().contains("WHERE") {
         let svc = sql.split('\'').nth(1).unwrap_or("").to_uppercase();
-        let filtered: Vec<_> = db.into_iter().filter(|e| e.service.to_uppercase().contains(&svc) || e.cve.contains(&svc)).collect();
+        let filtered: Vec<_> = db
+            .into_iter()
+            .filter(|e| e.service.to_uppercase().contains(&svc) || e.cve.contains(&svc))
+            .collect();
         return Ok(filtered);
     }
     Ok(db)
@@ -171,7 +194,11 @@ pub fn query_sqlite(sql: &str) -> Result<Vec<VulnEntry>, String> {
 
 pub fn check_port(port: &PortResult, db: &[VulnEntry]) -> Vec<Finding> {
     let mut findings = Vec::new();
-    let banner_upper = port.banner.as_ref().map(|b| b.to_uppercase()).unwrap_or_default();
+    let banner_upper = port
+        .banner
+        .as_ref()
+        .map(|b| b.to_uppercase())
+        .unwrap_or_default();
     let svc_hint = port.service_hint.clone().unwrap_or_default();
 
     for entry in db {
@@ -187,16 +214,20 @@ pub fn check_port(port: &PortResult, db: &[VulnEntry]) -> Vec<Finding> {
         // Si la entrada tiene match_ports, aplica solo si puerto coincide
         // Si tiene banner_contains, requiere banner match
         // Para entradas con ambos vacíos no aplica
-        let should_flag = if !entry.match_ports.is_empty() && !entry.match_banner_contains.is_empty() {
-            port_match && banner_match
-        } else if !entry.match_ports.is_empty() {
-            // Para SMB/RDP: si puerto abierto y servicio hint coincide o puerto coincide directo
-            port_match && (entry.service == svc_hint || entry.service == "SMB" && port.port == 445 || entry.service == "RDP" && port.port == 3389)
-        } else if !entry.match_banner_contains.is_empty() {
-            banner_match
-        } else {
-            false
-        };
+        let should_flag =
+            if !entry.match_ports.is_empty() && !entry.match_banner_contains.is_empty() {
+                port_match && banner_match
+            } else if !entry.match_ports.is_empty() {
+                // Para SMB/RDP: si puerto abierto y servicio hint coincide o puerto coincide directo
+                port_match
+                    && (entry.service == svc_hint
+                        || entry.service == "SMB" && port.port == 445
+                        || entry.service == "RDP" && port.port == 3389)
+            } else if !entry.match_banner_contains.is_empty() {
+                banner_match
+            } else {
+                false
+            };
 
         // Caso especial SMB/RDP: marcar si puerto abierto y no hay banner, pero sí vulnerabilidad conocida
         // Ya cubierto arriba, pero afinamos severidad

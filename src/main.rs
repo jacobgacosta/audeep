@@ -17,11 +17,11 @@ struct Args {
     no_scan: bool,
 
     /// Ruta JSON de salida (ej. --json=out.json)
-    #[arg(long, value_name="PATH")]
+    #[arg(long, value_name = "PATH")]
     json: Option<PathBuf>,
 
     /// Ruta HTML de salida (ej. --html=out.html)
-    #[arg(long, value_name="PATH")]
+    #[arg(long, value_name = "PATH")]
     html: Option<PathBuf>,
 
     /// Modo servidor: expone / (HTML), /json, /health en ADDR (default 0.0.0.0:8766, evita Koupper 8080)
@@ -49,7 +49,12 @@ async fn main() {
     let hw = hardware::collect_hardware_info();
     println!(
         "Hardware: {} | {} {} | {} núcleos | {:.1}/{:.1} GB RAM",
-        hw.hostname, hw.os_name, hw.os_version, hw.cpu.cores_logical, hw.memory.used_gb, hw.memory.total_gb
+        hw.hostname,
+        hw.os_name,
+        hw.os_version,
+        hw.cpu.cores_logical,
+        hw.memory.used_gb,
+        hw.memory.total_gb
     );
 
     let subnet = network::local_subnet_cidr();
@@ -64,7 +69,9 @@ async fn main() {
 
     if do_scan {
         if subnet.is_some() {
-            println!("Escaneando red local (puede tardar 20-60s, timeout 400ms, 64 tareas paralelas)...");
+            println!(
+                "Escaneando red local (puede tardar 20-60s, timeout 400ms, 64 tareas paralelas)..."
+            );
             let start = Instant::now();
             let mut discovered = network::discover_hosts(400, 64).await;
             discovered = network::enrich_with_arp(discovered).await;
@@ -77,7 +84,16 @@ async fn main() {
                 } else {
                     h.open_ports
                         .iter()
-                        .map(|p| format!("{}{}", p.port, p.service_hint.as_ref().map(|s| format!("({})", s)).unwrap_or_default()))
+                        .map(|p| {
+                            format!(
+                                "{}{}",
+                                p.port,
+                                p.service_hint
+                                    .as_ref()
+                                    .map(|s| format!("({})", s))
+                                    .unwrap_or_default()
+                            )
+                        })
                         .collect::<Vec<_>>()
                         .join(", ")
                 };
@@ -93,15 +109,25 @@ async fn main() {
                             .join(", ")
                     )
                 };
-                let mdns_str = if h.mdns_names.is_empty() { "".to_string() } else { format!(" | mdns: {}", h.mdns_names.join(",")) };
-                let ssdp_str = h.ssdp_location.as_ref().map(|s| format!(" | ssdp: {}", s)).unwrap_or_default();
+                let mdns_str = if h.mdns_names.is_empty() {
+                    "".to_string()
+                } else {
+                    format!(" | mdns: {}", h.mdns_names.join(","))
+                };
+                let ssdp_str = h
+                    .ssdp_location
+                    .as_ref()
+                    .map(|s| format!(" | ssdp: {}", s))
+                    .unwrap_or_default();
                 println!(
                     "  - {} {} | MAC {} | vendor {} | {} ms | puertos: {}{}{}{}",
                     h.ip,
                     h.hostname.clone().unwrap_or_default(),
                     h.mac.clone().unwrap_or_else(|| "-".to_string()),
                     h.vendor.clone().unwrap_or_else(|| "-".to_string()),
-                    h.latency_ms.map(|v| v.to_string()).unwrap_or_else(|| "-".to_string()),
+                    h.latency_ms
+                        .map(|v| v.to_string())
+                        .unwrap_or_else(|| "-".to_string()),
                     ports,
                     vuln_str,
                     mdns_str,
@@ -166,6 +192,9 @@ async fn main() {
         let default_html = PathBuf::from("audeep_reporte.html");
         let _ = audit.save_json(&default_json);
         let _ = audit.save_html(&default_html);
-        println!("\nReportes por defecto: {:?} y {:?}", default_json, default_html);
+        println!(
+            "\nReportes por defecto: {:?} y {:?}",
+            default_json, default_html
+        );
     }
 }

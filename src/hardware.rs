@@ -83,8 +83,12 @@ pub fn collect_hardware_info() -> HardwareReport {
     let cpus = sys.cpus();
     let first = cpus.first();
     let cpu = CpuInfo {
-        brand: first.map(|c| c.brand().to_string()).unwrap_or_else(|| "unknown".to_string()),
-        vendor: first.map(|c| c.vendor_id().to_string()).unwrap_or_else(|| "unknown".to_string()),
+        brand: first
+            .map(|c| c.brand().to_string())
+            .unwrap_or_else(|| "unknown".to_string()),
+        vendor: first
+            .map(|c| c.vendor_id().to_string())
+            .unwrap_or_else(|| "unknown".to_string()),
         cores_physical: sys.physical_core_count(),
         cores_logical: cpus.len(),
         frequency_mhz: first.map(|c| c.frequency()).unwrap_or(0),
