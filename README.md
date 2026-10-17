@@ -107,7 +107,7 @@ src/config.rs    audeep.json
 
 ## Tests y CI
 
-`cargo test` corre **39+ tests** de unidades sobre lo que importa: parseo de ARP en dos formatos y dos idiomas, matemática de subred, veredicto por TTL, clasificación de errores Winsock, ventana de SMB1, rangos de versión, reglas de vulnerabilidad, score de riesgo, diff del historial y escaping del reporte. GitHub Actions corre `fmt --check`, `clippy -D warnings` y `test` en Ubuntu y Windows.
+`cargo test` corre **55 tests** de unidades sobre lo que importa: parseo de ARP en dos formatos y dos idiomas, matemática de subred, veredicto por TTL, clasificación de errores Winsock, negociación de SMB1, rangos de versión de SSH, reglas de vulnerabilidad, score de riesgo, diff del historial y escaping del reporte. GitHub Actions corre `fmt --check`, `clippy -D warnings` y `test` en Ubuntu y Windows.
 
 ## Docs
 
