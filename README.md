@@ -24,10 +24,14 @@ Lo que la hace distinta de un `nmap` con esteroides: **dice con qué certeza afi
 ## Uso rápido (Windows)
 
 ```pwsh
-$env:PATH="C:\Users\jacob\AppData\Local\Temp\zig-x86_64-windows-0.16.0;"+$env:PATH
+# Opción simple: toolchain normal, sin zig
+cargo build
+.\target\debug\audeep.exe            # escanea y escribe los reportes
+.\target\debug\audeep.exe --serve    # http://127.0.0.1:8766/
+
+# Opción estática (Linux/USB, requiere zig 0.16 en el PATH + cargo install cargo-zigbuild)
 cargo zigbuild --target x86_64-pc-windows-gnu
-.\target\x86_64-pc-windows-gnu\debug\audeep.exe            # escanea y escribe los reportes
-.\target\x86_64-pc-windows-gnu\debug\audeep.exe --serve    # http://127.0.0.1:8766/
+.\target\x86_64-pc-windows-gnu\debug\audeep.exe
 ```
 
 Salida por defecto: `audeep_reporte.html`, `audeep_reporte.json` y `audeep_history.db`.
