@@ -4,8 +4,6 @@ Herramienta offline, portable (USB) y plug&play (Raspberry Pi) para inventario d
 
 Lo que la hace distinta de un `nmap` con esteroides: **dice con qué certeza afirma cada cosa y avisa qué cambió** desde el escaneo anterior.
 
-![Reporte de AuDeep corriendo sobre una red doméstica](docs/reporte.png)
-
 ## Novedades v0.2
 
 - **Veredicto de host honesto**: `Probe::Open | Refused | Filtered`. Un RST cuenta como host vivo; un timeout no afirma nada. Se acabó el heurístico de `ping` que leía textos en inglés que en otros idiomas no existen (`network::ping_reply_is_alive` solo acepta `TTL=`).
