@@ -4,6 +4,8 @@ Herramienta offline, portable (USB) y plug&play (Raspberry Pi) para inventario d
 
 Lo que la hace distinta de un `nmap` con esteroides: **dice con qué certeza afirma cada cosa y avisa qué cambió** desde el escaneo anterior.
 
+![Reporte de AuDeep corriendo sobre una red doméstica](docs/reporte.png)
+
 ## Novedades v0.2
 
 - **Veredicto de host honesto**: `Probe::Open | Refused | Filtered`. Un RST cuenta como host vivo; un timeout no afirma nada. Se acabó el heurístico de `ping` que leía textos en inglés que en otros idiomas no existen (`network::ping_reply_is_alive` solo acepta `TTL=`).
@@ -81,7 +83,25 @@ Todos los campos son opcionales; se validan y normalizan (puertos ordenados y si
 - Si lo exponés en la LAN (`--serve 0.0.0.0:8766`), usá `--serve-token` y recordá que el reporte incluye el inventario completo de tu red.
 - Salud: `GET /health`. Forzar reescaneo: `GET /scan`. JSON: `GET /json`. Docs: `/docs` y `/docs/conceptos`.
 
-## Raspberry Pi / USB / Docker
+## ¿Dónde corre?
+
+Un solo binario de ~7 MB que en un escaneo completo usa ~38 MB de RAM: **necesita un sistema operativo de verdad**, no un microcontrolador.
+
+| Dónde | ¿Corre? | Nota |
+|---|---|---|
+| PC o notebook con Windows / Linux | ✅ | El caso normal: `cargo build` y listo |
+| Mini-PC o PC vieja | ✅ | Mejor que una Raspberry: más RAM y ya trae pantalla |
+| Raspberry Pi, Orange Pi, Banana Pi, Radxa, BeagleBone | ✅ | Hay builds ARM64 y ARMv7 (`scripts/build_rpi.ps1`) |
+| NAS (Synology/QNAP x86 o ARM) que permita ejecutar binarios | ✅ | Por SSH |
+| Docker | ✅ | `Dockerfile` incluido |
+| Android con Termux | ⚠️ probable | Binario ARM64 estático; sin probar |
+| Router con OpenWrt | ⚠️ posible | Hay que compilar para su arquitectura y suele ir justo de RAM; sin probar |
+| macOS | ⚠️ necesita un ajuste | Lee la tabla ARP con comandos de Windows/Linux: en Mac caería a ping/TCP |
+| ESP32, Arduino, STM32 o cualquier microcontrolador | ❌ | Pide ~38 MB de RAM y un sistema operativo: un ESP32 tiene ~320 KB y un Arduino 2 KB |
+
+**Ojo con el USB:** el pendrive **no es la computadora**. Copiás el binario al pendrive y lo ejecutás **en la PC donde lo enchufás**, sin instalar nada. Si querés que el pendrive sea autónomo, se hace un Linux arrancable con AuDeep adentro (live USB): la computadora sigue siendo la PC y el pendrive solo trae el sistema.
+
+## Despliegue en Raspberry Pi / USB / Docker
 
 ```bash
 powershell -File scripts/build_rpi.ps1          # aarch64 / armv7 / musl 7.2-7.6 MB
