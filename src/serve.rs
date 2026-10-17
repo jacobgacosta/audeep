@@ -169,7 +169,7 @@ pub async fn serve(addr: &str, opts: ServeOptions) -> std::io::Result<()> {
         addr
     );
     println!(
-        "Endpoints: / HTML · /json JSON · /health · /scan (fuerza reescaneo) · /docs · /docs/conceptos · cache {}s",
+        "Endpoints: / HTML · /json JSON · /health · /scan (fuerza reescaneo) · /docs · /docs/guia · /docs/conceptos · cache {}s",
         opts.interval_secs
     );
     if opts.token.is_some() {
@@ -227,10 +227,20 @@ pub async fn serve(addr: &str, opts: ServeOptions) -> std::io::Result<()> {
                 ),
                 "/docs" | "/docs/" | "/docs.md" => {
                     let md = include_str!("../docs/architecture.md");
-                    let links = r#"<a href="/" style="font-family:ui-monospace;font-size:12px">← Volver al dashboard</a> · <a href="/docs/conceptos" style="font-family:ui-monospace;font-size:12px">Conceptos (qué / para qué)</a>"#;
+                    let links = r#"<a href="/" style="font-family:ui-monospace;font-size:12px">← Volver al dashboard</a> · <a href="/docs/guia" style="font-family:ui-monospace;font-size:12px">Guía simple (sin tecnicismos)</a> · <a href="/docs/conceptos" style="font-family:ui-monospace;font-size:12px">Conceptos (qué / para qué)</a>"#;
                     (
                         "200 OK",
                         docs_page("Docs", md, links),
+                        "text/html; charset=utf-8",
+                        None,
+                    )
+                }
+                "/docs/guia" | "/docs/guia.md" => {
+                    let md = include_str!("../docs/guia-conceptos.md");
+                    let links = r#"<a href="/" style="font-family:ui-monospace;font-size:12px">← Volver al dashboard</a> · <a href="/docs" style="font-family:ui-monospace;font-size:12px">Arquitectura</a> · <a href="/docs/conceptos" style="font-family:ui-monospace;font-size:12px">Conceptos</a>"#;
+                    (
+                        "200 OK",
+                        docs_page("Guía simple", md, links),
                         "text/html; charset=utf-8",
                         None,
                     )

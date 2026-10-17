@@ -117,5 +117,5 @@ src/config.rs    audeep.json
 
 - `docs/architecture.md` — arquitectura y stack
 - `docs/conceptos.md` — referencia técnica con ejemplos reales
-- En vivo: `/docs` y `/docs/conceptos` desde `--serve`
+- En vivo desde `--serve`: `/docs` (arquitectura), `/docs/guia` (guía simple sin tecnicismos) y `/docs/conceptos` (referencia técnica)
 - `deploy/ap/README.md` — modo AP (hostapd + dnsmasq)
